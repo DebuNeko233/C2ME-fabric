@@ -28,6 +28,9 @@ import com.ishland.c2me.opts.accel.metal.common.compiler.GeneratedMetalSource;
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplineCompiler;
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlan;
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalWorldgenSplineDiscovery;
+import com.ishland.c2me.opts.dfc.common.ast.EvalType;
+import com.ishland.c2me.opts.dfc.common.gen.jvm.util.DfcObjectCache;
+import net.minecraft.world.gen.densityfunction.DensityFunction;
 import net.minecraft.world.gen.noise.NoiseRouter;
 
 import java.util.ArrayList;
@@ -38,21 +41,17 @@ import java.util.Objects;
  * World-lifetime compiled representation of the currently supported Metal F32
  * spline islands.
  *
- * <p>The original NoiseRouter can be scanned once when a world is initialized,
+ * <p>The original NoiseRouter is scanned once when a world is initialized,
  * producing MSL source and exact JVM-DFC boundary templates without touching a
- * live ChunkNoiseSampler. The templates intentionally remain encapsulated here
- * until a non-mutating or construction-ordered cache/interpolator binding path
- * is implemented.</p>
- *
- * <p>In particular, callers must not take an already-live ChunkNoiseSampler
- * cache/interpolator and rebind an exact boundary CompiledEntry to it after
- * construction. Current DFC runtime cache wrappers implement
- * {@code c2me$withDelegate} by mutating their delegate in place, so that would
- * overwrite state owned by the normal world-generation graph.</p>
+ * live ChunkNoiseSampler. A sampler-specific binding later re-instantiates only
+ * the generated DFC arguments. Live IFastCacheLike objects are isolated behind
+ * non-mutating Metal cache views, so their normal world-generation delegates are
+ * not replaced.</p>
  *
  * <p>This class still does not redirect world generation. It establishes the
- * safe world-scoped compilation lifetime while deliberately keeping the
- * sampler-binding phase closed until its ownership semantics are resolved.</p>
+ * world-scoped compilation and sampler-scoped exact-boundary lifetimes required
+ * before the existing 2x2 / 4x4 chunk scheduling path can safely dispatch Metal
+ * work.</p>
  */
 public final class MetalWorldgenSplinePrograms {
 
@@ -97,6 +96,22 @@ public final class MetalWorldgenSplinePrograms {
         return List.copyOf(descriptors);
     }
 
+    BoundPrograms bindToSamplerVisitor(DensityFunction.DensityFunctionVisitor visitor) {
+        Objects.requireNonNull(visitor, "visitor");
+
+        List<BoundProgram> programs = new ArrayList<>(this.templates.size());
+        for (ProgramTemplate template : this.templates) {
+            programs.add(new BoundProgram(
+                    template.binding(),
+                    template.path(),
+                    template.plan(),
+                    template.generatedSource(),
+                    template.boundaries().bindWithCacheViews(visitor)
+            ));
+        }
+        return new BoundPrograms(programs);
+    }
+
     public record Descriptor(
             String binding,
             String path,
@@ -108,6 +123,83 @@ public final class MetalWorldgenSplinePrograms {
             Objects.requireNonNull(path, "path");
             if (boundaryCount < 0) throw new IllegalArgumentException("boundaryCount must be non-negative");
             if (sourceLength < 0) throw new IllegalArgumentException("sourceLength must be non-negative");
+        }
+    }
+
+    public static final class BoundPrograms {
+
+        private final List<BoundProgram> programs;
+
+        private BoundPrograms(List<BoundProgram> programs) {
+            this.programs = List.copyOf(programs);
+        }
+
+        public List<BoundProgram> programs() {
+            return this.programs;
+        }
+    }
+
+    public static final class BoundProgram {
+
+        private final String binding;
+        private final String path;
+        private final MetalF32SplinePlan plan;
+        private final GeneratedMetalSource generatedSource;
+        private final MetalExactBoundaryBatch boundaries;
+
+        private BoundProgram(
+                String binding,
+                String path,
+                MetalF32SplinePlan plan,
+                GeneratedMetalSource generatedSource,
+                MetalExactBoundaryBatch boundaries
+        ) {
+            this.binding = Objects.requireNonNull(binding, "binding");
+            this.path = Objects.requireNonNull(path, "path");
+            this.plan = Objects.requireNonNull(plan, "plan");
+            this.generatedSource = Objects.requireNonNull(generatedSource, "generatedSource");
+            this.boundaries = Objects.requireNonNull(boundaries, "boundaries");
+        }
+
+        public String binding() {
+            return this.binding;
+        }
+
+        public String path() {
+            return this.path;
+        }
+
+        public MetalF32SplinePlan plan() {
+            return this.plan;
+        }
+
+        public GeneratedMetalSource generatedSource() {
+            return this.generatedSource;
+        }
+
+        public int boundaryCount() {
+            return this.boundaries.boundaryCount();
+        }
+
+        public float[] evaluateBoundarySlotMajor(
+                int[] x,
+                int[] y,
+                int[] z,
+                EvalType type,
+                DfcObjectCache cache
+        ) {
+            return this.boundaries.evaluateSlotMajor(x, y, z, type, cache);
+        }
+
+        public void fillBoundarySlotMajor(
+                int[] x,
+                int[] y,
+                int[] z,
+                EvalType type,
+                DfcObjectCache cache,
+                float[] output
+        ) {
+            this.boundaries.fillSlotMajor(x, y, z, type, cache, output);
         }
     }
 

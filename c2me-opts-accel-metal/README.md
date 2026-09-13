@@ -23,9 +23,10 @@ The module currently provides the runtime and compiler foundation required by a 
 - an explicit host/exact F64 -> F32 boundary path that prevents Metal from recursively lowering F64 density functions to float;
 - a backend-internal hybrid `MetalF32SplinePlan` / `MetalF32SplinePlanner` that keeps F64 spline location producers outside the shader and represents only audited F32 spline work;
 - `MetalExactBoundaryBatch`, which compiles those F64 boundary AST producers through C2ME's existing JVM DFC generator and evaluates all samples through the generated bulk path before the explicit host `(float)` conversion;
-- retained exact-boundary `CompiledEntry` templates plus a package-private construction-time rebinding primitive, while deliberately preventing direct post-construction binding to live ChunkNoiseSampler cache/interpolator wrappers;
+- `MetalFastCacheView`, a non-mutating view over live DFC cache/interpolator wrappers that shares cache state without replacing the delegate owned by normal world generation;
+- sampler-scoped exact-boundary rebinding through `MetalChunkNoiseSamplerBinding`, guarded against blending and interpolation-loop binding;
 - `MetalWorldgenSplineDiscovery`, which scans the same optimized original NoiseRouter graphs used by the OpenCL compiler and finds maximal currently-supported F32 spline islands without descending into their F64 location producers;
-- `MetalWorldgenSplinePrograms`, which compiles discovery results once per world into encapsulated MSL + exact-boundary templates without exposing unsafe live-sampler binding;
+- `MetalWorldgenSplinePrograms`, which compiles discovery results once per world into MSL + exact-boundary templates and can bind those templates to a sampler through non-mutating cache views;
 - `MetalF32SplineReference`, a Java reference implementation matching the existing OpenCL spline range search, extrapolation and interpolation operation ordering;
 - `MetalF32SplineCompiler`, which emits nested planned F32 spline trees as MSL without placing any F64 producer work in the shader;
 - startup validation that exercises exact DFC bulk JIT -> explicit F64/F32 boundary -> MSL -> Metal, 257-element batching, pipeline reuse, buffer reuse, and a nested spline raw-bit differential probe.
@@ -50,13 +51,17 @@ C2ME's existing OpenCL spline path demonstrates an important mixed-precision bou
 
 `MetalExactBoundaryBatch` closes the exact execution link. It registers each planned F64 producer as a root in `BytecodeGen.Context`, finalizes the normal JVM DFC generated class, and evaluates the resulting `SubCompiledDensityFunction` roots with `EachApplierVanillaInterface`. `AbstractCompiledDensityFunction.fill` therefore reaches the existing generated `IMultiMethod.evalMulti(double[], int[], int[], int[], ...)` path for the entire coordinate batch. Only after that F64 bulk evaluation is complete are values explicitly converted to F32 in slot-major order.
 
-The compiled boundary template retains its `CompiledEntry` because real world-generation cache/interpolator semantics will eventually require DFC argument rebinding. However, direct post-construction rebinding to an already-live ChunkNoiseSampler is not safe with the current DFC wrapper contract. Runtime `DensityInterpolator`, `FlatCache` and related `IFastCacheLike` implementations use `c2me$withDelegate(...)` to mutate their delegate in place and return the same wrapper object. Rebinding a second generated entry to those shared live objects could therefore replace the delegate owned by normal world generation.
+### Sampler cache/interpolator ownership
 
-For that reason, the low-level rebinding primitive is package-private and explicitly construction-oriented. A real integration must first establish one of two ownership-safe models: bind Metal templates during sampler construction in an order where the normal DFC graph owns the final delegate, or introduce a non-mutating cache/interpolator view that can share cached values without replacing the live wrapper's delegate.
+Directly rebinding a second generated entry to an already-live `ChunkNoiseSampler` wrapper is unsafe with the normal DFC wrapper contract. `DensityInterpolator`, `FlatCache`, `Cache2D`, `CacheOnce` and `CellCache` implement `c2me$withDelegate(...)` by changing their delegate field in place. Giving those live objects directly to a Metal generated entry could therefore replace the delegate used by normal world generation.
 
-Original `DensityFunctionTypes.Wrapping` objects are still not sufficient for real sampler equivalence: their DFC fast-cache implementation behaves as cache misses with no-op writes. The exact boundary compiler can evaluate such graphs correctly as uncached exact functions, as the startup probe does, but real interpolation/cache behavior must be resolved before region dispatch is enabled.
+`MetalFastCacheView` removes that ownership conflict. A sampler visitor still resolves each original NoiseRouter wrapper to the real runtime cache/interpolator object, but the result is immediately wrapped before `CompiledEntry.newInstance(...)` initializes generated fields. The view forwards `c2me$getCached(...)` and `c2me$cache(...)` to the live wrapper while storing its generated delegate separately. Its `c2me$withDelegate(...)` creates another view rather than mutating the backing object.
 
-The exact boundary roots intentionally have no blending fallback. A real chunk-generation integration must preserve the existing no-blending/offload eligibility gate before using this path.
+This means the Metal exact graph can observe and update the same cache state while normal world-generation delegate ownership remains unchanged. Cache-state sharing itself is intentional, but it still needs integration-level differential testing against normal CPU/OpenCL behavior before any region dispatch is enabled.
+
+Original `DensityFunctionTypes.Wrapping` objects are not sufficient for real sampler equivalence: their DFC fast-cache implementation behaves as cache misses with no-op writes. The exact boundary compiler can evaluate such graphs correctly as uncached exact functions, as the startup probe does, while real sampler-bound evaluation uses the actual runtime wrappers behind `MetalFastCacheView`.
+
+The exact boundary roots intentionally have no blending fallback. `MetalChunkNoiseSamplerBinding` rejects blended samplers, and any future region scheduler must preserve the existing region-wide no-blending eligibility gate as well.
 
 The startup probes verify the generic explicit F64 -> F32 transport path, and the nested spline probe uses two real generated F64 boundary producers based on batched coordinates and non-binary scales. Their DFC-JIT results are checked before the Java reference and Metal result are required to match at raw binary32 level for all 257 samples. This validates the implemented spline-island contract without claiming that arbitrary F32 DensityFunction arithmetic is already portable to Metal.
 
@@ -66,7 +71,7 @@ The startup probes verify the generic explicit F64 -> F32 transport path, and th
 
 The discovery pass examines the standard NoiseRouter bindings plus `final_final_density`. When a `SplineNormalNode` can be planned as one Metal F32 island, the whole maximal spline tree is recorded and nested spline children are not emitted as separate candidates. If an outer spline is not yet supported, discovery may continue through its F32 value children, but it does not descend into the outer spline's F64 location producer. That prevents a future execution plan from accidentally creating a CPU -> GPU -> CPU dependency inside what should remain one exact boundary.
 
-`MetalWorldgenSplinePrograms` turns those discoveries into world-lifetime templates: each candidate owns its `MetalF32SplinePlan`, generated MSL source and compiled exact DFC boundary template. Expensive AST discovery, JVM bytecode generation and MSL source generation can therefore stay out of the chunk hot path. The sampler-binding phase is intentionally not exposed yet because live DFC cache wrappers have mutable delegate ownership.
+`MetalWorldgenSplinePrograms` turns those discoveries into world-lifetime templates: each candidate owns its `MetalF32SplinePlan`, generated MSL source and compiled exact DFC boundary template. Expensive AST discovery, JVM bytecode generation and MSL source generation therefore stay out of the chunk hot path. `MetalChunkNoiseSamplerBinding` later re-instantiates only the DFC arguments for one sampler and isolates live cache/interpolator objects behind non-mutating views.
 
 ## Floating-point compilation policy
 
@@ -102,14 +107,16 @@ The first nontrivial F32 island is implemented internally, but is not yet connec
 
 1. `MetalWorldgenSplineDiscovery` finds maximal candidate spline islands in the OpenCL-optimized original NoiseRouter ASTs.
 2. `MetalF32SplinePlanner` accepts audited `ConstantF32Node` / `SplineNormalNode` structure and extracts each F64 location producer as an explicit host boundary input.
-3. `MetalWorldgenSplinePrograms` compiles the resulting plans once per world into encapsulated MSL and exact JVM-DFC boundary templates.
-4. `MetalExactBoundaryBatch` can evaluate an unbound exact graph over a complete x/y/z coordinate batch through the generated F64 multi method, which is sufficient for the current synthetic boundary probe.
-5. The host performs the explicit `(float)` conversion only after exact bulk evaluation and writes the values in slot-major order.
-6. `MetalF32SplineReference` evaluates the plan on Java using the same binary range search, outside-range sampling and interpolation expression ordering as the current OpenCL spline runtime/emitter.
-7. `MetalF32SplineCompiler` emits the same planned tree as MSL, including nested spline values and raw-bit encoded locations/derivatives.
-8. `MetalSplineRuntimeProbe` validates the DFC-produced boundaries, then compares Java-reference and Metal results bit-for-bit across 257 samples while also verifying pipeline/buffer reuse.
+3. `MetalWorldgenSplinePrograms` compiles the resulting plans once per world into MSL and exact JVM-DFC boundary templates.
+4. `MetalChunkNoiseSamplerBinding` resolves original wrapper arguments through one sampler's actual-density-function visitor before the interpolation loop starts.
+5. `MetalFastCacheView` shares the sampler's cache/interpolator state while keeping the Metal generated delegate separate from the live wrapper's normal worldgen delegate.
+6. `MetalExactBoundaryBatch` evaluates each bound boundary slot over the complete x/y/z coordinate batch through the generated F64 multi method.
+7. The host performs the explicit `(float)` conversion only after exact bulk evaluation and writes the values in slot-major order.
+8. `MetalF32SplineReference` evaluates the plan on Java using the same binary range search, outside-range sampling and interpolation expression ordering as the current OpenCL spline runtime/emitter.
+9. `MetalF32SplineCompiler` emits the same planned tree as MSL, including nested spline values and raw-bit encoded locations/derivatives.
+10. `MetalSplineRuntimeProbe` validates the synthetic DFC-produced boundaries, then compares Java-reference and Metal results bit-for-bit across 257 samples while also verifying pipeline/buffer reuse.
 
-A real ChunkNoiseSampler-bound exact boundary is deliberately **not** enabled yet. The current runtime wrappers mutate their delegates during DFC rebinding, so sampler integration needs an ownership-safe construction-time or non-mutating cache-view design first.
+The sampler-bound path now has an ownership-safe bridge, but it is deliberately not connected to chunk generation until real-world differential tests prove that shared cache/interpolator state and evaluation timing remain equivalent.
 
 The planner does **not** make `SplineNormalNode` generally safe for direct recursive Metal AST compilation. Its F64 location producers remain deliberately outside Metal.
 
@@ -121,9 +128,9 @@ The real OpenCL batching point is identified: `BatchingBiomeNoiseStatus` creates
 
 The OpenCL worldgen data layout gives the relevant batch geometry directly: cell start/count, block-space cache2d start/size, biome area and other dynamic offsets are built once for the region. Interpolator prefill samples exact cell-corner block coordinates, while cache2d prefill samples the whole region in block X/Z. Metal should reuse this region geometry instead of independently walking every chunk.
 
-The exact F64 bulk execution mechanism is therefore no longer an open question, and neither is the 2x2/4x4 scheduling boundary. The newly identified blocker is ownership of sampler cache/interpolator delegates. Directly rebinding Metal generated roots to live wrappers after sampler construction would mutate shared delegates, so that approach was tested conceptually and intentionally rejected before being connected to world generation.
+The exact F64 bulk execution mechanism, sampler delegate ownership model and 2x2/4x4 scheduling boundary are now all identified. The next correctness gate is integration-level equivalence: evaluate discovered real spline islands through `MetalChunkNoiseSamplerBinding`, compare their slot-major F32 boundaries and Metal outputs with normal CPU/OpenCL behavior, and confirm that shared cache/interpolator state is not observably perturbed.
 
-`c2me-rewrites-chunk-system` remains intentionally absent from the Metal module until the dispatch integration is actually implemented. Discovery and world-lifetime compilation still require only the existing base + DFC dependencies.
+`c2me-rewrites-chunk-system` remains intentionally absent from the Metal module until the dispatch integration is actually implemented. Discovery, world-lifetime compilation and sampler-bound exact evaluation still require only the existing base + DFC dependencies.
 
 ## CI
 
@@ -133,11 +140,11 @@ These CI jobs validate the Java/Gradle build on both macOS architectures; they d
 
 ## Next implementation stages
 
-1. Resolve sampler cache/interpolator ownership with one of two safe designs: construction-ordered boundary binding that leaves the normal DFC graph as final delegate owner, or a non-mutating cache/interpolator view that reads existing cache state without replacing live delegates.
-2. Add integration-level differential coverage for the chosen binding design before exposing any sampler-bound Metal boundary program.
-3. Reuse the existing 2x2 / 4x4 batch geometry to build one sufficiently large Metal workload, preserving the no-blending gate and avoiding per-spline synchronization.
-4. Only when the real dispatch is ready, add the required chunk-system dependency/integration and route the first validated region workload behind the default-off capability flag.
-5. Benchmark real chunk/region batches and reject offloads where transfer/synchronization overhead outweighs compute savings.
+1. Add integration-level differential coverage for `MetalChunkNoiseSamplerBinding` using discovered real-world spline islands, including cache/interpolator hit/miss behavior and raw F32 boundary equality against the normal CPU/OpenCL path.
+2. Reuse the existing 2x2 / 4x4 batch geometry to build one sufficiently large Metal workload, preserving the no-blending gate and avoiding per-spline synchronization.
+3. Only when that real dispatch is ready, add the required chunk-system dependency/integration and route the first validated region workload behind the default-off capability flag.
+4. Benchmark real chunk/region batches and reject offloads where transfer/synchronization overhead outweighs compute savings.
+5. Add real Intel and Apple Silicon runtime evidence for the generated MSL probes and the first world-generation workload.
 6. Only enable Metal world-generation dispatch by default after output compatibility and performance are proven on real Intel and Apple Silicon Macs.
 
 The design goal is to make Metal a first-class macOS backend without reducing world-generation determinism or destabilizing the existing OpenCL accelerator.

@@ -27,6 +27,7 @@ package com.ishland.c2me.base.mixin.access;
 import net.minecraft.block.BlockState;
 import net.minecraft.world.gen.chunk.Blender;
 import net.minecraft.world.gen.chunk.ChunkNoiseSampler;
+import net.minecraft.world.gen.densityfunction.DensityFunction;
 import net.minecraft.world.gen.densityfunction.DensityFunctionTypes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -82,6 +83,9 @@ public interface IChunkNoiseSampler {
 
     @Invoker
     BlockState invokeSampleBlockState();
+
+    @Invoker
+    DensityFunction invokeGetActualDensityFunction(DensityFunction function);
 
     @Accessor
     int getHorizontalBiomeEnd();

@@ -26,10 +26,10 @@ package com.ishland.c2me.opts.accel.metal.common;
 
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlan;
 import com.ishland.c2me.opts.dfc.common.ast.EvalType;
-import com.ishland.c2me.opts.dfc.common.ducks.ICompiledCachingAwareVisitor;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.BytecodeGen;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.CompiledEntry;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.SubCompiledDensityFunction;
+import com.ishland.c2me.opts.dfc.common.gen.jvm.internalapi.ArgumentVisitor;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.util.DfcObjectCache;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.vif.EachApplierVanillaInterface;
 import net.minecraft.world.gen.densityfunction.DensityFunction;
@@ -49,19 +49,16 @@ import java.util.Objects;
  * construction. Results remain F64 until the explicit Java {@code (float)}
  * assignment into the slot-major output buffer.</p>
  *
- * <p>The compiled entry is retained because a future real-world integration
- * still needs DFC argument rebinding. That rebinding is deliberately not exposed
- * as a normal runtime operation: current ChunkNoiseSampler cache/interpolator
- * implementations make {@code c2me$withDelegate} mutate the live wrapper in
- * place. Rebinding a second generated entry to an already-live wrapper after
- * sampler construction could therefore overwrite the delegate used by normal
- * world generation.</p>
+ * <p>The compiled entry is retained so its DensityFunction arguments can be
+ * rebound to a particular ChunkNoiseSampler. Runtime cache/interpolator wrappers
+ * are never handed directly to the generated entry: each one is first wrapped
+ * by {@link MetalFastCacheView}. The view shares cache state but owns the Metal
+ * generated delegate independently, so generated {@code c2me$withDelegate}
+ * calls cannot replace the delegate used by normal world generation.</p>
  *
- * <p>The safe integration point must either bind in a construction order where
- * normal DFC setup owns the final delegate, or introduce a non-mutating cache
- * view. Until then, world-scoped templates remain unbound. The generated roots
- * also intentionally have no blending fallback, so any eventual offload must
- * retain the existing no-blending capability gate.</p>
+ * <p>The generated roots intentionally have no blending fallback. Any real
+ * world-generation caller must retain the existing no-blending eligibility gate
+ * before evaluating these roots or dispatching the corresponding F32 island.</p>
  */
 final class MetalExactBoundaryBatch {
 
@@ -103,28 +100,27 @@ final class MetalExactBoundaryBatch {
     }
 
     /**
-     * Low-level construction-time rebinding primitive. Do not pass a visitor
-     * that returns cache/interpolator wrappers already owned by a live sampler:
-     * generated cache fields call {@code c2me$withDelegate}, and current runtime
-     * wrappers mutate themselves in place.
-     *
-     * <p>This method remains package-private so a future integration can use it
-     * only after establishing an ownership-safe construction order or a
-     * non-mutating wrapper strategy.</p>
+     * Re-instantiates this template for one sampler visitor without mutating the
+     * sampler's live IFastCacheLike delegates.
      */
-    MetalExactBoundaryBatch bindForConstruction(DensityFunction.DensityFunctionVisitor visitor) {
+    MetalExactBoundaryBatch bindWithCacheViews(DensityFunction.DensityFunctionVisitor visitor) {
         Objects.requireNonNull(visitor, "visitor");
         if (this.compiledEntry == null) {
             return this;
         }
 
-        var argumentVisitor = ICompiledCachingAwareVisitor.c2me$getArgumentVisitor(visitor);
-        CompiledEntry rebound;
-        if (visitor instanceof ICompiledCachingAwareVisitor cachingAwareVisitor) {
-            rebound = cachingAwareVisitor.c2me$visitIfAbsent(this.compiledEntry, argumentVisitor);
-        } else {
-            rebound = this.compiledEntry.newInstance(this.compiledEntry.getArgs(), argumentVisitor);
-        }
+        ArgumentVisitor argumentVisitor = next -> {
+            if (next instanceof DensityFunction densityFunction) {
+                DensityFunction rebound = densityFunction.apply(visitor);
+                return MetalFastCacheView.wrap(rebound);
+            }
+            if (next instanceof DensityFunction.Noise noise) {
+                return visitor.apply(noise);
+            }
+            return next;
+        };
+
+        CompiledEntry rebound = this.compiledEntry.newInstance(this.compiledEntry.getArgs(), argumentVisitor);
         return new MetalExactBoundaryBatch(rebound);
     }
 
