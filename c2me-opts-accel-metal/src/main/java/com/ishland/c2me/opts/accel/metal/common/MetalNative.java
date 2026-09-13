@@ -291,7 +291,7 @@ final class MetalNative {
 
             ByteBuffer result = stack.malloc(Long.BYTES);
             LibFFI.ffi_call(RETURN_NSUINTEGER_CIF, this.objcMsgSend, result, arguments);
-            return result.getLong(0);
+            return MemoryUtil.memGetLong(MemoryUtil.memAddress(result));
         }
     }
 
