@@ -54,11 +54,7 @@ final class MetalBatchExecutor implements AutoCloseable {
     }
 
     int[] executeF32Bits(GeneratedMetalSource generatedSource, int elementCount) {
-        Objects.requireNonNull(generatedSource, "generatedSource");
-        this.ensureOpen();
-        if (generatedSource.returnType() != AstNode.ReturnType.F32) {
-            throw new IllegalArgumentException("Metal F32 executor received " + generatedSource.returnType());
-        }
+        this.validateF32Program(generatedSource);
         if (elementCount < 0) {
             throw new IllegalArgumentException("Metal batch size must be non-negative");
         }
@@ -73,17 +69,36 @@ final class MetalBatchExecutor implements AutoCloseable {
             // Poison the visible range before dispatch so a stale/reused buffer
             // cannot accidentally satisfy validation if a thread was skipped.
             MemoryUtil.memSet(output.contents(), 0xA5, outputBytes);
-            if (!this.nativeApi.execute1DBatch(this.commandQueue, pipeline, output.handle(), elementCount)) {
-                throw new IllegalStateException("Metal command buffer did not complete successfully");
-            }
-
-            int[] result = new int[elementCount];
-            for (int i = 0; i < elementCount; i++) {
-                result[i] = MemoryUtil.memGetInt(output.contents() + (long) i * Integer.BYTES);
-            }
-            return result;
+            this.dispatch(pipeline, output, elementCount);
+            return readBits(output, elementCount);
         } finally {
             this.bufferPool.release(output);
+        }
+    }
+
+    /**
+     * Execute an in-place F32 boundary program over host-produced raw float bits.
+     * The caller is responsible for performing any required F64 -> F32 rounding
+     * before supplying the bits; Metal only receives the already-rounded values.
+     */
+    int[] executeF32BoundaryBits(GeneratedMetalSource generatedSource, int[] inputBits) {
+        this.validateF32Program(generatedSource);
+        Objects.requireNonNull(inputBits, "inputBits");
+        if (inputBits.length == 0) {
+            return new int[0];
+        }
+
+        int bytes = Math.multiplyExact(inputBits.length, Integer.BYTES);
+        long pipeline = this.pipelineCache.getOrCompile(generatedSource);
+        MetalSharedBufferPool.SharedBuffer io = this.bufferPool.acquire(bytes);
+        try {
+            for (int i = 0; i < inputBits.length; i++) {
+                MemoryUtil.memPutInt(io.contents() + (long) i * Integer.BYTES, inputBits[i]);
+            }
+            this.dispatch(pipeline, io, inputBits.length);
+            return readBits(io, inputBits.length);
+        } finally {
+            this.bufferPool.release(io);
         }
     }
 
@@ -103,6 +118,28 @@ final class MetalBatchExecutor implements AutoCloseable {
         this.closed = true;
         this.bufferPool.close();
         this.pipelineCache.close();
+    }
+
+    private void validateF32Program(GeneratedMetalSource generatedSource) {
+        Objects.requireNonNull(generatedSource, "generatedSource");
+        this.ensureOpen();
+        if (generatedSource.returnType() != AstNode.ReturnType.F32) {
+            throw new IllegalArgumentException("Metal F32 executor received " + generatedSource.returnType());
+        }
+    }
+
+    private void dispatch(long pipeline, MetalSharedBufferPool.SharedBuffer buffer, int elementCount) {
+        if (!this.nativeApi.execute1DBatch(this.commandQueue, pipeline, buffer.handle(), elementCount)) {
+            throw new IllegalStateException("Metal command buffer did not complete successfully");
+        }
+    }
+
+    private static int[] readBits(MetalSharedBufferPool.SharedBuffer buffer, int elementCount) {
+        int[] result = new int[elementCount];
+        for (int i = 0; i < elementCount; i++) {
+            result[i] = MemoryUtil.memGetInt(buffer.contents() + (long) i * Integer.BYTES);
+        }
+        return result;
     }
 
     private synchronized void ensureOpen() {
