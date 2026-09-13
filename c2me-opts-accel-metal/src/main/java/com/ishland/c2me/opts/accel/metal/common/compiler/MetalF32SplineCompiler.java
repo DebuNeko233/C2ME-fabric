@@ -80,8 +80,10 @@ public final class MetalF32SplineCompiler {
                 }
             }
 
-            for (MetalF32SplinePlan.PlannedValue value : this.orderedValues) {
-                this.emitFunction(source, value);
+            // IDs are assigned parent-first. Emit definitions child-first so a
+            // spline function never calls a function that has not been declared.
+            for (int i = this.orderedValues.size() - 1; i >= 0; i--) {
+                this.emitFunction(source, this.orderedValues.get(i));
             }
 
             source.append("kernel void ").append(ENTRY_POINT)
