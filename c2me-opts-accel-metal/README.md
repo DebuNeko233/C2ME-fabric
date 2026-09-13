@@ -20,6 +20,8 @@ The runtime bridge uses LWJGL's Objective-C/JNI helpers and its bundled LibFFI s
 
 The backend is marked available only after the probe shader is compiled, dispatched on the GPU, completed and read back with the expected result. A failure at any stage leaves the normal C2ME path active.
 
+`metalAccel.enabled` is intentionally **disabled by default** at this stage. Enabling it currently validates the Metal runtime/compute path only; it does not redirect chunk generation yet.
+
 ## World-generation integration status
 
 This milestone deliberately does **not** redirect chunk generation yet. The existing OpenCL accelerator contains a substantial DensityFunction-to-OpenCL compiler, generated constant/dynamic data ABI, cache-prefill kernels, device scheduling and chunk-system integration. Those pieces need a Metal-aware implementation rather than a blind OpenCL-C-to-MSL text conversion.
