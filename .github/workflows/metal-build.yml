@@ -2,7 +2,11 @@ name: C2ME Metal Backend Build
 
 on:
   workflow_dispatch:
+  # Feature branches are covered by pull_request. Keep direct push CI for the
+  # integration branch without enqueueing a duplicate Metal matrix for PR pushes.
   push:
+    branches:
+      - dev/26.2.0
     paths:
       - 'c2me-opts-accel-metal/**'
       - 'c2me-opts-accel-opencl/**'
@@ -22,7 +26,7 @@ on:
       - '.github/workflows/metal-build.yml'
 
 concurrency:
-  group: metal-${{ github.head_ref || github.ref_name }}
+  group: metal-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -32,6 +36,7 @@ permissions:
 jobs:
   compile-shared-abi:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v5
@@ -62,6 +67,7 @@ jobs:
           :c2me-opts-accel-opencl:compileJava
           :c2me-opts-accel-metal:compileJava
           -x :c2me-opts-natives-math:processResources
+          --no-daemon
           --stacktrace
         env:
           GPR_MAVEN_USER: ${{ github.actor }}
@@ -76,6 +82,7 @@ jobs:
           - macos-15-intel
 
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v5
@@ -97,7 +104,7 @@ jobs:
           cache-cleanup: never
 
       - name: Compile Metal backend
-        run: ./gradlew :c2me-opts-accel-metal:compileJava --stacktrace
+        run: ./gradlew :c2me-opts-accel-metal:compileJava --no-daemon --stacktrace
         env:
           GPR_MAVEN_USER: ${{ github.actor }}
           GPR_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}

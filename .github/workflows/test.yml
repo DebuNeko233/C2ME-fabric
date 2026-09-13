@@ -1,11 +1,14 @@
 name: C2ME Test
 
 on:
-  push: {}
+  # PRs already validate feature branches; avoid duplicating the same matrix on push.
+  push:
+    branches:
+      - dev/26.2.0
   pull_request: {}
 
 concurrency:
-  group: test-${{ github.head_ref || github.ref_name }}
+  group: test-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -49,7 +52,7 @@ jobs:
         
     - name: Test C2ME
       run: |
-        ./gradlew clean ${{ matrix.testTask }}
+        ./gradlew clean ${{ matrix.testTask }} --no-daemon --stacktrace
       env:
         GPR_MAVEN_USER: ${{ github.actor }}
         GPR_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
