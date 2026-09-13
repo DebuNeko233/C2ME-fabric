@@ -60,6 +60,13 @@ public record WorldgenRegionGeometry(
         }
     }
 
+    public static boolean isAligned(int chunkX, int chunkZ, int chunkCount) {
+        if (chunkCount <= 0) {
+            throw new IllegalArgumentException("chunkCount must be positive");
+        }
+        return Math.floorMod(chunkX, chunkCount) == 0 && Math.floorMod(chunkZ, chunkCount) == 0;
+    }
+
     private static int horizontalBlockSize(int chunkCount) {
         return Math.multiplyExact(chunkCount, 16);
     }
