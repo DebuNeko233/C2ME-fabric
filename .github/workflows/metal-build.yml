@@ -21,6 +21,10 @@ on:
       - 'gradle.properties'
       - '.github/workflows/metal-build.yml'
 
+concurrency:
+  group: metal-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: read
