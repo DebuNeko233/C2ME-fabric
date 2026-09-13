@@ -28,7 +28,9 @@ import com.ishland.c2me.opts.dfc.common.worldgen.WorldgenRegionGeometry;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WorldgenRegionGeometryTest {
 
@@ -89,6 +91,20 @@ class WorldgenRegionGeometryTest {
         assertEquals(9, geometry.interpolatorSizeX());
         assertEquals(8, geometry.biomeSizeX());
         assertEquals(40, geometry.surfaceHeightBiomeSizeX());
+    }
+
+    @Test
+    void alignmentMatchesPowerOfTwoOpenclBatchingForNegativeCoordinates() {
+        assertTrue(WorldgenRegionGeometry.isAligned(0, 0, 4));
+        assertTrue(WorldgenRegionGeometry.isAligned(8, -12, 4));
+        assertTrue(WorldgenRegionGeometry.isAligned(-8, -4, 4));
+        assertFalse(WorldgenRegionGeometry.isAligned(-7, -4, 4));
+        assertFalse(WorldgenRegionGeometry.isAligned(-8, -3, 4));
+
+        assertTrue(WorldgenRegionGeometry.isAligned(-2, 6, 2));
+        assertFalse(WorldgenRegionGeometry.isAligned(-1, 6, 2));
+        assertThrows(IllegalArgumentException.class, () ->
+                WorldgenRegionGeometry.isAligned(0, 0, 0));
     }
 
     @Test
