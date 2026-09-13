@@ -44,7 +44,6 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.system.MemoryUtil.POINTER_SIZE;
 import static org.lwjgl.system.MemoryUtil.memPutAddress;
-import static org.lwjgl.system.MemoryUtil.memPutInt;
 import static org.lwjgl.system.MemoryUtil.memPutLong;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_pointer;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_ulong;
@@ -55,6 +54,7 @@ final class MetalNative {
     private static final String METAL_FRAMEWORK = "/System/Library/Frameworks/Metal.framework/Metal";
     private static final String FOUNDATION_FRAMEWORK = "/System/Library/Frameworks/Foundation.framework/Foundation";
     private static final String CORE_GRAPHICS_FRAMEWORK = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
+    private static final long MTL_COMMAND_BUFFER_STATUS_COMPLETED = 4L;
 
     // Objective-C methods that take MTLSize by value cannot be expressed by the
     // fixed JNI call signatures exposed by LWJGL. LibFFI provides the exact ABI
@@ -68,12 +68,17 @@ final class MetalNative {
             ffi_type_ulong,
             ffi_type_ulong
     );
-    private static final FFICIF DISPATCH_THREADGROUPS_CIF = apiCreateCIF(
+    private static final FFICIF DISPATCH_GRID_CIF = apiCreateCIF(
             ffi_type_void,
             ffi_type_pointer,
             ffi_type_pointer,
             MTL_SIZE_TYPE,
             MTL_SIZE_TYPE
+    );
+    private static final FFICIF RETURN_NSUINTEGER_CIF = apiCreateCIF(
+            ffi_type_ulong,
+            ffi_type_pointer,
+            ffi_type_pointer
     );
 
     private final SharedLibrary metalLibrary;
@@ -150,10 +155,10 @@ final class MetalNative {
             return this.sendPointer(device, "newComputePipelineStateWithFunction:error:", function, NULL);
         } finally {
             if (function != NULL) {
-                this.release(function);
+                this.releaseObject(function);
             }
             if (library != NULL) {
-                this.release(library);
+                this.releaseObject(library);
             }
             if (pool != NULL) {
                 this.sendVoid(pool, "drain");
@@ -161,24 +166,28 @@ final class MetalNative {
         }
     }
 
-    boolean executeProbe(long device, long commandQueue, long pipeline, int expectedValue) {
+    long newSharedBuffer(long device, long length) {
+        if (length <= 0L) {
+            throw new IllegalArgumentException("Metal buffer length must be positive");
+        }
+        // MTLResourceStorageModeShared is encoded as zero in MTLResourceOptions.
+        return this.sendPointerNUIntNUInt(device, "newBufferWithLength:options:", length, 0L);
+    }
+
+    long getBufferContents(long buffer) {
+        return this.sendPointer(buffer, "contents");
+    }
+
+    boolean execute1DBatch(long commandQueue, long pipeline, long outputBuffer, long elementCount) {
+        if (elementCount < 0L) {
+            throw new IllegalArgumentException("Metal dispatch element count must be non-negative");
+        }
+        if (elementCount == 0L) {
+            return true;
+        }
+
         long pool = this.newAutoreleasePool();
-        long output = NULL;
         try {
-            // MTLResourceStorageModeShared is encoded as zero in MTLResourceOptions.
-            // Waiting for command completion provides the required CPU/GPU ordering
-            // before the shared buffer is read back below.
-            output = this.sendPointerNUIntNUInt(device, "newBufferWithLength:options:", Integer.BYTES, 0L);
-            if (output == NULL) {
-                return false;
-            }
-
-            long contents = this.sendPointer(output, "contents");
-            if (contents == NULL) {
-                return false;
-            }
-            memPutInt(contents, ~expectedValue);
-
             long commandBuffer = this.sendPointer(commandQueue, "commandBuffer");
             if (commandBuffer == NULL) {
                 return false;
@@ -189,20 +198,28 @@ final class MetalNative {
             }
 
             this.sendVoidPointer(encoder, "setComputePipelineState:", pipeline);
-            this.sendVoidPointerNUIntNUInt(encoder, "setBuffer:offset:atIndex:", output, 0L, 0L);
-            this.dispatchThreadgroups(encoder, 1L, 1L, 1L, 1L, 1L, 1L);
+            this.sendVoidPointerNUIntNUInt(encoder, "setBuffer:offset:atIndex:", outputBuffer, 0L, 0L);
+
+            long executionWidth = Math.max(1L, this.sendNUInteger(pipeline, "threadExecutionWidth"));
+            long maxThreads = Math.max(1L, this.sendNUInteger(pipeline, "maxTotalThreadsPerThreadgroup"));
+            long threadsPerGroup = Math.min(elementCount, Math.min(executionWidth, maxThreads));
+            this.dispatchThreads(encoder, elementCount, 1L, 1L, threadsPerGroup, 1L, 1L);
+
             this.sendVoid(encoder, "endEncoding");
             this.sendVoid(commandBuffer, "commit");
             this.sendVoid(commandBuffer, "waitUntilCompleted");
 
-            return MemoryUtil.memGetInt(contents) == expectedValue;
+            return this.sendNUInteger(commandBuffer, "status") == MTL_COMMAND_BUFFER_STATUS_COMPLETED;
         } finally {
-            if (output != NULL) {
-                this.release(output);
-            }
             if (pool != NULL) {
                 this.sendVoid(pool, "drain");
             }
+        }
+    }
+
+    void releaseObject(long object) {
+        if (object != NULL) {
+            this.sendVoid(object, "release");
         }
     }
 
@@ -227,10 +244,6 @@ final class MetalNative {
         } finally {
             MemoryUtil.memFree(utf8);
         }
-    }
-
-    private void release(long object) {
-        this.sendVoid(object, "release");
     }
 
     private long selector(String name) {
@@ -265,6 +278,23 @@ final class MetalNative {
         JNI.invokePPPV(receiver, this.selector(selector), arg0, this.objcMsgSend);
     }
 
+    private long sendNUInteger(long receiver, String selector) {
+        try (MemoryStack stack = stackPush()) {
+            long receiverStorage = stack.nmalloc(POINTER_SIZE, POINTER_SIZE);
+            long selectorStorage = stack.nmalloc(POINTER_SIZE, POINTER_SIZE);
+            memPutAddress(receiverStorage, receiver);
+            memPutAddress(selectorStorage, this.selector(selector));
+
+            PointerBuffer arguments = stack.mallocPointer(2);
+            arguments.put(0, receiverStorage);
+            arguments.put(1, selectorStorage);
+
+            ByteBuffer result = stack.malloc(Long.BYTES);
+            LibFFI.ffi_call(RETURN_NSUINTEGER_CIF, this.objcMsgSend, result, arguments);
+            return result.getLong(0);
+        }
+    }
+
     private void sendVoidPointerNUIntNUInt(long receiver, String selector, long pointer, long value0, long value1) {
         try (MemoryStack stack = stackPush()) {
             long receiverStorage = stack.nmalloc(POINTER_SIZE, POINTER_SIZE);
@@ -290,11 +320,11 @@ final class MetalNative {
         }
     }
 
-    private void dispatchThreadgroups(
+    private void dispatchThreads(
             long encoder,
-            long groupsX,
-            long groupsY,
-            long groupsZ,
+            long gridX,
+            long gridY,
+            long gridZ,
             long threadsX,
             long threadsY,
             long threadsZ
@@ -302,14 +332,14 @@ final class MetalNative {
         try (MemoryStack stack = stackPush()) {
             long receiverStorage = stack.nmalloc(POINTER_SIZE, POINTER_SIZE);
             long selectorStorage = stack.nmalloc(POINTER_SIZE, POINTER_SIZE);
-            long groupsStorage = stack.nmalloc(Long.BYTES, Long.BYTES * 3);
+            long gridStorage = stack.nmalloc(Long.BYTES, Long.BYTES * 3);
             long threadsStorage = stack.nmalloc(Long.BYTES, Long.BYTES * 3);
 
             memPutAddress(receiverStorage, encoder);
-            memPutAddress(selectorStorage, this.selector("dispatchThreadgroups:threadsPerThreadgroup:"));
-            memPutLong(groupsStorage, groupsX);
-            memPutLong(groupsStorage + Long.BYTES, groupsY);
-            memPutLong(groupsStorage + Long.BYTES * 2L, groupsZ);
+            memPutAddress(selectorStorage, this.selector("dispatchThreads:threadsPerThreadgroup:"));
+            memPutLong(gridStorage, gridX);
+            memPutLong(gridStorage + Long.BYTES, gridY);
+            memPutLong(gridStorage + Long.BYTES * 2L, gridZ);
             memPutLong(threadsStorage, threadsX);
             memPutLong(threadsStorage + Long.BYTES, threadsY);
             memPutLong(threadsStorage + Long.BYTES * 2L, threadsZ);
@@ -317,10 +347,10 @@ final class MetalNative {
             PointerBuffer arguments = stack.mallocPointer(4);
             arguments.put(0, receiverStorage);
             arguments.put(1, selectorStorage);
-            arguments.put(2, groupsStorage);
+            arguments.put(2, gridStorage);
             arguments.put(3, threadsStorage);
 
-            LibFFI.ffi_call(DISPATCH_THREADGROUPS_CIF, this.objcMsgSend, null, arguments);
+            LibFFI.ffi_call(DISPATCH_GRID_CIF, this.objcMsgSend, null, arguments);
         }
     }
 
