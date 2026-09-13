@@ -24,6 +24,9 @@
 
 package com.ishland.c2me.opts.accel.metal.common;
 
+import com.ishland.c2me.opts.accel.metal.common.compiler.GeneratedMetalSource;
+import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32Compiler;
+import com.ishland.c2me.opts.dfc.common.ast.misc.ConstantF32Node;
 import org.lwjgl.system.Platform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +36,7 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 public final class MetalRuntime {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetalRuntime.class);
+    private static final int COMPILER_PROBE_BITS = 0x3EAAAAAB; // nearest F32 representation of 1/3
 
     private static volatile State state = State.UNINITIALIZED;
     private static MetalNative nativeApi;
@@ -70,16 +74,18 @@ public final class MetalRuntime {
                 throw new IllegalStateException("Metal device did not create a command queue");
             }
 
-            probePipeline = nativeApi.compileProbePipeline(device);
+            float compilerProbeValue = Float.intBitsToFloat(COMPILER_PROBE_BITS);
+            GeneratedMetalSource generatedProbe = MetalF32Compiler.compile(new ConstantF32Node(compilerProbeValue));
+            probePipeline = nativeApi.compilePipeline(device, generatedProbe.source(), generatedProbe.entryPoint());
             if (probePipeline == NULL) {
-                throw new IllegalStateException("Metal failed to compile the C2ME compute probe pipeline");
+                throw new IllegalStateException("Metal failed to compile the generated C2ME DFC F32 probe pipeline");
             }
-            if (!nativeApi.executeProbe(device, commandQueue, probePipeline)) {
-                throw new IllegalStateException("Metal compute probe did not produce the expected GPU result");
+            if (!nativeApi.executeProbe(device, commandQueue, probePipeline, COMPILER_PROBE_BITS)) {
+                throw new IllegalStateException("Metal DFC F32 compute probe did not produce the expected raw float bits");
             }
 
             state = State.AVAILABLE;
-            LOGGER.info("Metal backend initialized on '{}' (MSL compile, dispatch and readback verified)", deviceName);
+            LOGGER.info("Metal backend initialized on '{}' (DFC F32 -> MSL compile, dispatch and bit-exact readback verified)", deviceName);
         } catch (Throwable t) {
             state = State.FAILED;
             LOGGER.warn("Failed to initialize the experimental Metal backend; keeping the normal C2ME path", t);
