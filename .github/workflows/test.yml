@@ -49,10 +49,19 @@ jobs:
       with:
         cache-read-only: false
         cache-cleanup: never
-        
+
     - name: Test C2ME
+      shell: bash
       run: |
-        ./gradlew clean ${{ matrix.testTask }} --no-daemon --stacktrace
+        set +e
+        timeout --signal=TERM --kill-after=30s 20m \
+          ./gradlew clean "${{ matrix.testTask }}" --no-daemon --stacktrace
+        status=$?
+        set -e
+        if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+          echo "::error::${{ matrix.testTask }} exceeded the 20-minute process watchdog"
+        fi
+        exit "$status"
       env:
         GPR_MAVEN_USER: ${{ github.actor }}
         GPR_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
