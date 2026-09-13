@@ -47,15 +47,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * once per identity, then every real ChunkNoiseSampler is bound through the same
  * cache/interpolator ownership bridge intended for future region dispatch.</p>
  *
- * <p>At a bounded number of real interpolation cells the probe also evaluates
- * original, sampler-bound Minecraft spline-location functions first and the
- * generated exact DFC boundary roots second. Their explicit F64 -> F32 results
- * must match bit-for-bit for every reference-backed boundary slot.</p>
+ * <p>At one real interpolation cell the probe also evaluates original,
+ * sampler-bound Minecraft spline-location functions first and the generated
+ * exact DFC boundary roots second. The cell still covers the sampler's complete
+ * preloaded coordinate batch and every reference-backed boundary slot. Their
+ * explicit F64 -> F32 results must match bit-for-bit.</p>
  */
 public final class MetalSamplerBindingIntegrationProbe {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetalSamplerBindingIntegrationProbe.class);
-    private static final int MAX_DIFFERENTIAL_CELLS = 64;
+    private static final int MAX_DIFFERENTIAL_CELLS = 1;
     private static final Map<NoiseRouter, MetalWorldgenSplinePrograms> PROGRAMS = new IdentityHashMap<>();
     private static final AtomicInteger SAMPLERS = new AtomicInteger();
     private static final AtomicInteger BOUND_PROGRAMS = new AtomicInteger();
@@ -107,15 +108,22 @@ public final class MetalSamplerBindingIntegrationProbe {
             return;
         }
 
-        int probeIndex = DIFFERENTIAL_CELLS.getAndIncrement();
-        if (probeIndex >= MAX_DIFFERENTIAL_CELLS) {
-            return;
-        }
+        int probeIndex;
+        do {
+            probeIndex = DIFFERENTIAL_CELLS.get();
+            if (probeIndex >= MAX_DIFFERENTIAL_CELLS) {
+                return;
+            }
+        } while (!DIFFERENTIAL_CELLS.compareAndSet(probeIndex, probeIndex + 1));
 
         IPreloadedCoordinates coordinates = (IPreloadedCoordinates) (Object) sampler;
         int[] x = coordinates.c2me$getXArray();
         int[] y = coordinates.c2me$getYArray();
         int[] z = coordinates.c2me$getZArray();
+        if (x.length == 0 || y.length != x.length || z.length != x.length) {
+            throw new IllegalStateException("Metal sampler boundary differential received invalid preloaded coordinates: x="
+                    + x.length + ", y=" + y.length + ", z=" + z.length);
+        }
         DfcObjectCache cache = ((IDfcObjectCacheCapable) (Object) sampler).c2me$getDfcObjectCache();
 
         int comparedValues = 0;
@@ -161,13 +169,15 @@ public final class MetalSamplerBindingIntegrationProbe {
             }
         }
 
-        if (comparedValues != 0) {
-            int total = DIFFERENTIAL_VALUES.addAndGet(comparedValues);
-            if (probeIndex < 4) {
-                LOGGER.info("Metal sampler boundary differential cell #{} matched {} raw F32 value(s), total={}",
-                        probeIndex + 1, comparedValues, total);
-            }
+        if (comparedValues == 0) {
+            throw new IllegalStateException("Metal sampler boundary differential bound "
+                    + boundPrograms.programs().size()
+                    + " real spline program(s) but compared zero reference-backed values");
         }
+
+        int total = DIFFERENTIAL_VALUES.addAndGet(comparedValues);
+        LOGGER.info("Metal sampler boundary differential cell #{} matched {} raw F32 value(s), total={}",
+                probeIndex + 1, comparedValues, total);
     }
 
     public static int samplerCount() {
