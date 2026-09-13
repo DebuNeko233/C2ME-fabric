@@ -36,6 +36,7 @@ import org.lwjgl.system.libffi.LibFFI;
 import org.lwjgl.system.macosx.ObjCRuntime;
 
 import java.nio.ByteBuffer;
+import java.util.Objects;
 
 import static org.lwjgl.system.APIUtil.apiCreateCIF;
 import static org.lwjgl.system.APIUtil.apiCreateStruct;
@@ -126,28 +127,21 @@ final class MetalNative {
         return name != null ? name : "Unknown Metal device";
     }
 
-    long compileProbePipeline(long device) {
+    long compilePipeline(long device, String sourceCode, String entryPoint) {
+        Objects.requireNonNull(sourceCode, "sourceCode");
+        Objects.requireNonNull(entryPoint, "entryPoint");
+
         long pool = this.newAutoreleasePool();
         long library = NULL;
         long function = NULL;
         try {
-            long source = this.newNSString("""
-                    #include <metal_stdlib>
-                    using namespace metal;
-
-                    kernel void c2me_metal_probe(device uint *output [[buffer(0)]],
-                                                 uint gid [[thread_position_in_grid]]) {
-                        if (gid == 0) {
-                            output[0] = 0xC2u;
-                        }
-                    }
-                    """);
+            long source = this.newNSString(sourceCode);
             library = this.sendPointer(device, "newLibraryWithSource:options:error:", source, NULL, NULL);
             if (library == NULL) {
                 return NULL;
             }
 
-            long functionName = this.newNSString("c2me_metal_probe");
+            long functionName = this.newNSString(entryPoint);
             function = this.sendPointer(library, "newFunctionWithName:", functionName);
             if (function == NULL) {
                 return NULL;
@@ -167,7 +161,7 @@ final class MetalNative {
         }
     }
 
-    boolean executeProbe(long device, long commandQueue, long pipeline) {
+    boolean executeProbe(long device, long commandQueue, long pipeline, int expectedValue) {
         long pool = this.newAutoreleasePool();
         long output = NULL;
         try {
@@ -183,7 +177,7 @@ final class MetalNative {
             if (contents == NULL) {
                 return false;
             }
-            memPutInt(contents, 0);
+            memPutInt(contents, ~expectedValue);
 
             long commandBuffer = this.sendPointer(commandQueue, "commandBuffer");
             if (commandBuffer == NULL) {
@@ -201,7 +195,7 @@ final class MetalNative {
             this.sendVoid(commandBuffer, "commit");
             this.sendVoid(commandBuffer, "waitUntilCompleted");
 
-            return MemoryUtil.memGetInt(contents) == 0xC2;
+            return MemoryUtil.memGetInt(contents) == expectedValue;
         } finally {
             if (output != NULL) {
                 this.release(output);
