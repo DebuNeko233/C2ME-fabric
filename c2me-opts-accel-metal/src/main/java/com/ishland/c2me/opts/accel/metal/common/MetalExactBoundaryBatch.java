@@ -26,11 +26,13 @@ package com.ishland.c2me.opts.accel.metal.common;
 
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlan;
 import com.ishland.c2me.opts.dfc.common.ast.EvalType;
+import com.ishland.c2me.opts.dfc.common.ducks.ICompiledCachingAwareVisitor;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.BytecodeGen;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.CompiledEntry;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.SubCompiledDensityFunction;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.util.DfcObjectCache;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.vif.EachApplierVanillaInterface;
+import net.minecraft.world.gen.densityfunction.DensityFunction;
 
 import java.util.Objects;
 
@@ -40,12 +42,18 @@ import java.util.Objects;
  *
  * <p>No AST interpretation happens here. Every boundary producer becomes a
  * normal generated DFC root and is executed through
- * {@link SubCompiledDensityFunction#fill(double[], net.minecraft.world.gen.densityfunction.DensityFunction.EachApplier)}.
+ * {@link SubCompiledDensityFunction#fill(double[], DensityFunction.EachApplier)}.
  * {@link EachApplierVanillaInterface} exposes the already-batched x/y/z arrays,
  * so {@code AbstractCompiledDensityFunction.fill} reaches the generated
  * {@code IMultiMethod.evalMulti} path without per-sample {@code NoisePos}
  * construction. Results remain F64 until the explicit Java {@code (float)}
  * assignment into the slot-major output buffer.</p>
+ *
+ * <p>The compiled entry is retained so a real ChunkNoiseSampler visitor can be
+ * applied to all generated arguments before evaluation. This mirrors
+ * {@code CompiledDensityFunction.apply}: wrapping/cache arguments are rebound to
+ * the visitor-produced runtime objects rather than accidentally evaluating the
+ * original NoiseRouter wrappers as permanently uncached delegates.</p>
  *
  * <p>The generated roots intentionally have no blending fallback. A future real
  * world-generation call site must therefore keep the existing no-blending
@@ -54,17 +62,24 @@ import java.util.Objects;
  */
 final class MetalExactBoundaryBatch {
 
+    private final CompiledEntry compiledEntry;
     private final SubCompiledDensityFunction[] roots;
 
-    private MetalExactBoundaryBatch(SubCompiledDensityFunction[] roots) {
-        this.roots = Objects.requireNonNull(roots, "roots").clone();
+    private MetalExactBoundaryBatch(CompiledEntry compiledEntry) {
+        this.compiledEntry = Objects.requireNonNull(compiledEntry, "compiledEntry");
+        this.roots = compiledEntry.getRoots();
+    }
+
+    private MetalExactBoundaryBatch() {
+        this.compiledEntry = null;
+        this.roots = new SubCompiledDensityFunction[0];
     }
 
     static MetalExactBoundaryBatch compile(MetalF32SplinePlan plan) {
         Objects.requireNonNull(plan, "plan");
         int boundaryCount = plan.boundaryInputs().size();
         if (boundaryCount == 0) {
-            return new MetalExactBoundaryBatch(new SubCompiledDensityFunction[0]);
+            return new MetalExactBoundaryBatch();
         }
 
         BytecodeGen.Context context = BytecodeGen.initContext();
@@ -77,12 +92,34 @@ final class MetalExactBoundaryBatch {
         }
 
         CompiledEntry compiledEntry = BytecodeGen.finalizeCompilation(context);
-        SubCompiledDensityFunction[] roots = compiledEntry.getRoots();
-        if (roots.length != boundaryCount) {
+        if (compiledEntry.getRootsUnsafe().length != boundaryCount) {
             throw new IllegalStateException("DFC boundary root count mismatch: expected "
-                    + boundaryCount + ", got " + roots.length);
+                    + boundaryCount + ", got " + compiledEntry.getRootsUnsafe().length);
         }
-        return new MetalExactBoundaryBatch(roots);
+        return new MetalExactBoundaryBatch(compiledEntry);
+    }
+
+    /**
+     * Re-instantiates the generated DFC class with the same argument visitor
+     * mechanism used by {@code CompiledDensityFunction.apply}. A real
+     * ChunkNoiseSampler integration must bind the boundary batch through the
+     * same visitor that turns NoiseRouter wrappers into its runtime cache and
+     * interpolation objects before evaluating any coordinates.
+     */
+    MetalExactBoundaryBatch bind(DensityFunction.DensityFunctionVisitor visitor) {
+        Objects.requireNonNull(visitor, "visitor");
+        if (this.compiledEntry == null) {
+            return this;
+        }
+
+        var argumentVisitor = ICompiledCachingAwareVisitor.c2me$getArgumentVisitor(visitor);
+        CompiledEntry rebound;
+        if (visitor instanceof ICompiledCachingAwareVisitor cachingAwareVisitor) {
+            rebound = cachingAwareVisitor.c2me$visitIfAbsent(this.compiledEntry, argumentVisitor);
+        } else {
+            rebound = this.compiledEntry.newInstance(this.compiledEntry.getArgs(), argumentVisitor);
+        }
+        return new MetalExactBoundaryBatch(rebound);
     }
 
     int boundaryCount() {
