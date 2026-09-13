@@ -30,28 +30,35 @@ import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlan;
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlanner;
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplineReference;
 import com.ishland.c2me.opts.dfc.common.ast.AstNode;
+import com.ishland.c2me.opts.dfc.common.ast.EvalType;
+import com.ishland.c2me.opts.dfc.common.ast.binary.MulNode;
 import com.ishland.c2me.opts.dfc.common.ast.misc.ConstantF32Node;
 import com.ishland.c2me.opts.dfc.common.ast.misc.ConstantNode;
+import com.ishland.c2me.opts.dfc.common.ast.misc.CoordinateNode;
 import com.ishland.c2me.opts.dfc.common.ast.spline.SplineNormalNode;
 
 /**
  * Runtime differential probe for the first nontrivial hybrid F32 workload.
  *
- * <p>This is deliberately stronger than a shader-compilation probe: the same
- * nested spline plan is evaluated by the Java/OpenCL-ordered reference and by
- * Metal, then compared using raw binary32 bits. A mismatch disables the backend
- * before any real world-generation path can depend on it.</p>
+ * <p>This is deliberately stronger than a shader-compilation probe: the F64
+ * boundary producers are first compiled and batch-evaluated by the existing JVM
+ * DFC generator, explicitly rounded to F32 on the host, and then the same nested
+ * spline plan is evaluated by the Java/OpenCL-ordered reference and by Metal.
+ * The final results are compared using raw binary32 bits. A mismatch disables
+ * the backend before any real world-generation path can depend on it.</p>
  */
 final class MetalSplineRuntimeProbe {
 
     private static final int SAMPLE_COUNT = 257;
+    private static final double OUTER_SCALE = 0.1D;
+    private static final double INNER_SCALE = 1.0D / 12.0D;
 
     private MetalSplineRuntimeProbe() {
     }
 
     static void validate(MetalBatchExecutor executor) {
-        ConstantNode outerLocation = new ConstantNode(0.0);
-        ConstantNode innerLocation = new ConstantNode(1.0);
+        AstNode outerLocation = new MulNode(CoordinateNode.AXIS_X, new ConstantNode(OUTER_SCALE));
+        AstNode innerLocation = new MulNode(CoordinateNode.AXIS_Z, new ConstantNode(INNER_SCALE));
 
         SplineNormalNode inner = new SplineNormalNode(
                 innerLocation,
@@ -81,7 +88,19 @@ final class MetalSplineRuntimeProbe {
             throw new IllegalStateException("Metal hybrid spline planner did not preserve explicit F64 boundary slots");
         }
 
-        float[] boundaryValues = createBoundaryValues();
+        CoordinateBatch coordinates = createCoordinates();
+        MetalExactBoundaryBatch exactBoundaries = MetalExactBoundaryBatch.compile(plan);
+        if (exactBoundaries.boundaryCount() != 2) {
+            throw new IllegalStateException("Metal exact boundary evaluator did not compile both DFC roots");
+        }
+        float[] boundaryValues = exactBoundaries.evaluateSlotMajor(
+                coordinates.x(),
+                coordinates.y(),
+                coordinates.z(),
+                EvalType.NORMAL
+        );
+        validateBoundaryValues(boundaryValues, coordinates);
+
         int[] expected = MetalF32SplineReference.evaluateBatchBits(plan, boundaryValues, SAMPLE_COUNT);
         GeneratedMetalSource generated = MetalF32SplineCompiler.compile(plan);
 
@@ -109,48 +128,35 @@ final class MetalSplineRuntimeProbe {
         }
     }
 
-    private static float[] createBoundaryValues() {
-        double[] outerValues = {
-                -8.0,
-                -2.000000238418579,
-                -2.0,
-                -1.9999998807907104,
-                -0.75,
-                0.0,
-                0.4999999701976776,
-                0.5,
-                0.5000000596046448,
-                1.75,
-                2.999999761581421,
-                3.0,
-                3.000000238418579,
-                8.0,
-        };
-        double[] innerValues = {
-                -6.0,
-                -1.5000001192092896,
-                -1.5,
-                -1.4999998807907104,
-                -0.125,
-                0.2499999850988388,
-                0.25,
-                0.2500000298023224,
-                1.0 / 3.0,
-                1.25,
-                1.9999998807907104,
-                2.0,
-                2.000000238418579,
-                Math.PI,
-        };
-
-        float[] values = new float[2 * SAMPLE_COUNT];
+    private static CoordinateBatch createCoordinates() {
+        int[] x = new int[SAMPLE_COUNT];
+        int[] y = new int[SAMPLE_COUNT];
+        int[] z = new int[SAMPLE_COUNT];
         for (int sample = 0; sample < SAMPLE_COUNT; sample++) {
-            // These casts model the exact host-side F64 -> F32 boundary. Metal
-            // never sees the double values themselves.
-            values[sample] = (float) outerValues[sample % outerValues.length];
-            values[SAMPLE_COUNT + sample] = (float) innerValues[(sample * 5 + 3) % innerValues.length];
+            // The non-binary scales intentionally force real F64 -> F32 rounding
+            // while the coordinate ranges cross all spline knots and both
+            // extrapolation regions.
+            x[sample] = Math.floorMod(sample * 29, 161) - 80;
+            y[sample] = Math.floorMod(sample * 13, 33) - 16;
+            z[sample] = Math.floorMod(sample * 47, 145) - 72;
         }
-        return values;
+        return new CoordinateBatch(x, y, z);
+    }
+
+    private static void validateBoundaryValues(float[] actual, CoordinateBatch coordinates) {
+        if (actual.length != 2 * SAMPLE_COUNT) {
+            throw new IllegalStateException("Metal exact boundary evaluator returned an unexpected result length");
+        }
+        for (int sample = 0; sample < SAMPLE_COUNT; sample++) {
+            float expectedOuter = (float) (coordinates.x()[sample] * OUTER_SCALE);
+            float expectedInner = (float) (coordinates.z()[sample] * INNER_SCALE);
+            if (Float.floatToRawIntBits(actual[sample]) != Float.floatToRawIntBits(expectedOuter)) {
+                throw new IllegalStateException("DFC outer boundary mismatch at sample " + sample);
+            }
+            if (Float.floatToRawIntBits(actual[SAMPLE_COUNT + sample]) != Float.floatToRawIntBits(expectedInner)) {
+                throw new IllegalStateException("DFC inner boundary mismatch at sample " + sample);
+            }
+        }
     }
 
     private static void validateBits(int[] expected, int[] actual) {
@@ -164,5 +170,8 @@ final class MetalSplineRuntimeProbe {
                         + ", got 0x" + Integer.toHexString(actual[i]));
             }
         }
+    }
+
+    private record CoordinateBatch(int[] x, int[] y, int[] z) {
     }
 }
