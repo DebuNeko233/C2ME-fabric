@@ -32,8 +32,8 @@ import com.ishland.c2me.opts.dfc.common.ast.AstNode;
  * <p>C2ME's existing OpenCL spline path evaluates the location function with
  * F64 semantics and performs an explicit cast to float before the spline math.
  * Metal must preserve that conversion point instead of recursively compiling
- * the F64 subtree as float. The input buffer of programs generated here is
- * therefore already rounded to IEEE-754 binary32 by the exact host path.</p>
+ * the F64 subtree as float. Values entering these programs are therefore
+ * already rounded to IEEE-754 binary32 by the exact host path.</p>
  */
 public final class MetalF32BoundaryCompiler {
 
@@ -43,19 +43,19 @@ public final class MetalF32BoundaryCompiler {
     }
 
     /**
-     * A bit-preserving boundary probe. This deliberately performs no arithmetic;
-     * it proves that values rounded by the exact path arrive at Metal unchanged
-     * before downstream F32-only work is enabled.
+     * A bit-preserving in-place boundary probe. This deliberately performs no
+     * arithmetic; it proves that host-rounded F32 values arrive at Metal
+     * unchanged before downstream F32-only work is enabled.
      */
     public static GeneratedMetalSource compileIdentity() {
         String source = """
                 #include <metal_stdlib>
                 using namespace metal;
 
-                kernel void %s(device const float *input [[buffer(0)]],
-                               device uint *output [[buffer(1)]],
+                kernel void %s(device uint *io [[buffer(0)]],
                                uint gid [[thread_position_in_grid]]) {
-                    output[gid] = as_type<uint>(input[gid]);
+                    const float value = as_type<float>(io[gid]);
+                    io[gid] = as_type<uint>(value);
                 }
                 """.formatted(IDENTITY_ENTRY_POINT);
         return new GeneratedMetalSource(source, IDENTITY_ENTRY_POINT, AstNode.ReturnType.F32);
