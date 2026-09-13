@@ -13,14 +13,23 @@ The module currently provides the runtime foundation required by a real Metal wo
 - runtime Metal Shading Language compilation;
 - compute-pipeline creation;
 - real compute dispatch through `MTLComputeCommandEncoder`;
-- shared-buffer GPU write + CPU readback validation using a small probe kernel;
-- Intel macOS and Apple Silicon LWJGL native packaging.
+- shared-buffer GPU write + CPU readback validation;
+- Intel macOS and Apple Silicon LWJGL native packaging;
+- a conservative DensityFunction-AST Metal compatibility gate;
+- the first DFC F32-to-MSL code-generation path (`ConstantF32Node`);
+- startup validation that runs a real DFC node through AST -> MSL -> Metal -> raw-bit readback.
 
 The runtime bridge uses LWJGL's Objective-C/JNI helpers and its bundled LibFFI support for Objective-C calls that pass `MTLSize` structures by value. It does not require an extra JNI dylib and does not require Java FFM native-access flags.
 
-The backend is marked available only after the probe shader is compiled, dispatched on the GPU, completed and read back with the expected result. A failure at any stage leaves the normal C2ME path active.
+The backend is marked available only after a generated DFC F32 probe is compiled, dispatched on the GPU, completed and read back with the exact expected IEEE-754 bits. A failure at any stage leaves the normal C2ME path active.
 
-`metalAccel.enabled` is intentionally **disabled by default** at this stage. Enabling it currently validates the Metal runtime/compute path only; it does not redirect chunk generation yet.
+`metalAccel.enabled` is intentionally **disabled by default** at this stage. Enabling it currently validates the Metal compiler/runtime/compute path only; it does not redirect chunk generation yet.
+
+## F32 capability policy
+
+Metal does not silently reinterpret C2ME's F64 DensityFunction graph as F32. `MetalCompatibility` requires every accepted node to be explicitly F32 in DFC and to have an audited MSL emitter. Any F64 or unsupported subtree is rejected before Metal code generation and remains on the existing exact path.
+
+The initial emitter intentionally supports only `ConstantF32Node`. Float constants are emitted from their raw IEEE-754 bit pattern with MSL `as_type<float>` instead of decimal literals, avoiding an extra text-parsing rounding step and preserving values such as signed zero exactly.
 
 ## World-generation integration status
 
@@ -31,7 +40,7 @@ The largest compatibility issue is floating-point semantics: the existing accele
 ## Next implementation stages
 
 1. Extract/share backend-neutral generated-data metadata from the OpenCL compiler.
-2. Add an MSL code generator for F32-safe DensityFunction AST nodes.
+2. Expand the audited MSL emitter set only for DFC nodes whose actual return type is F32.
 3. Add reusable Metal buffers, pipeline caching and batched dispatch.
 4. Integrate an initial F32-safe world-generation workload behind capability checks.
 5. Add CPU/OpenCL-vs-Metal output-difference tests before widening kernel coverage.
