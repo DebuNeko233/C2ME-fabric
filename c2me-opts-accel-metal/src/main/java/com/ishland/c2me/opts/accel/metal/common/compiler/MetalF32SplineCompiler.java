@@ -37,10 +37,10 @@ import java.util.Objects;
  * Emits the F32 portion of a {@link MetalF32SplinePlan} as MSL.
  *
  * <p>F64 producers are intentionally absent from the generated shader. The
- * kernel receives their already-rounded F32 values in a slot-major input buffer
- * and evaluates only the audited spline portion. Operation ordering mirrors the
- * existing OpenCL emitter so the result can be checked bit-for-bit against
- * {@link MetalF32SplineReference} before any world-generation integration.</p>
+ * kernel receives their already-rounded F32 raw bits in a slot-major shared
+ * buffer and evaluates only the audited spline portion. Output is written after
+ * the boundary input region in the same buffer, allowing the already-validated
+ * single-buffer Metal dispatch path to be reused.</p>
  */
 public final class MetalF32SplineCompiler {
 
@@ -86,14 +86,14 @@ public final class MetalF32SplineCompiler {
                 this.emitFunction(source, this.orderedValues.get(i));
             }
 
+            int boundaryCount = this.plan.boundaryInputs().size();
             source.append("kernel void ").append(ENTRY_POINT)
-                    .append("(device const float *boundary_values [[buffer(0)]],\n")
-                    .append("             device uint *output [[buffer(1)]],\n")
+                    .append("(device uint *io [[buffer(0)]],\n")
                     .append("             uint gid [[thread_position_in_grid]],\n")
                     .append("             uint sample_count [[threads_per_grid]]) {\n")
                     .append("    const float value = c2me_spline_value_").append(this.idOf(this.plan.root()))
-                    .append("(boundary_values, gid, sample_count);\n")
-                    .append("    output[gid] = as_type<uint>(value);\n")
+                    .append("(io, gid, sample_count);\n")
+                    .append("    io[").append(boundaryCount).append("u * sample_count + gid] = as_type<uint>(value);\n")
                     .append("}\n");
 
             return new GeneratedMetalSource(
@@ -143,7 +143,7 @@ public final class MetalF32SplineCompiler {
         private void emitFunction(StringBuilder source, MetalF32SplinePlan.PlannedValue value) {
             int id = this.idOf(value);
             source.append("static inline float c2me_spline_value_").append(id)
-                    .append("(device const float *boundary_values, uint gid, uint sample_count) {\n");
+                    .append("(device const uint *io, uint gid, uint sample_count) {\n");
 
             if (value instanceof MetalF32SplinePlan.ConstantValue constant) {
                 source.append("    return ").append(floatFromBits(constant.rawBits())).append(";\n")
@@ -156,13 +156,13 @@ public final class MetalF32SplineCompiler {
             int last = length - 1;
             String prefix = "c2me_spline_" + id;
 
-            source.append("    const float point = boundary_values[")
-                    .append(spline.boundaryInputIndex()).append("u * sample_count + gid];\n");
+            source.append("    const float point = as_type<float>(io[")
+                    .append(spline.boundaryInputIndex()).append("u * sample_count + gid]);\n");
 
             if (length == 1) {
                 source.append("    const float value = c2me_spline_value_")
                         .append(this.idOf(spline.values().getFirst()))
-                        .append("(boundary_values, gid, sample_count);\n")
+                        .append("(io, gid, sample_count);\n")
                         .append("    const float location = as_type<float>(").append(prefix).append("_location_bits[0]);\n")
                         .append("    const float derivative = as_type<float>(").append(prefix).append("_derivative_bits[0]);\n")
                         .append("    return derivative == 0.0f ? value : value + derivative * (point - location);\n")
@@ -201,9 +201,9 @@ public final class MetalF32SplineCompiler {
             for (int i = 0; i < last; i++) {
                 source.append("        case ").append(i).append(":\n")
                         .append("            n = c2me_spline_value_").append(this.idOf(spline.values().get(i)))
-                        .append("(boundary_values, gid, sample_count);\n")
+                        .append("(io, gid, sample_count);\n")
                         .append("            o = c2me_spline_value_").append(this.idOf(spline.values().get(i + 1)))
-                        .append("(boundary_values, gid, sample_count);\n")
+                        .append("(io, gid, sample_count);\n")
                         .append("            break;\n");
             }
 
@@ -229,7 +229,7 @@ public final class MetalF32SplineCompiler {
         ) {
             source.append(indent).append("const float value = c2me_spline_value_")
                     .append(this.idOf(spline.values().get(valueIndex)))
-                    .append("(boundary_values, gid, sample_count);\n")
+                    .append("(io, gid, sample_count);\n")
                     .append(indent).append("const float location = as_type<float>(c2me_spline_")
                     .append(splineId).append("_location_bits[").append(valueIndex).append("]);\n")
                     .append(indent).append("const float derivative = as_type<float>(c2me_spline_")
