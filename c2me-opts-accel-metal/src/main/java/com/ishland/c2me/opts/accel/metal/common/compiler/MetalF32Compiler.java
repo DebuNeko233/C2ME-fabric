@@ -35,13 +35,14 @@ import java.util.Objects;
  * be F32-safe by {@link MetalCompatibility}.
  *
  * <p>The generated kernel writes the raw IEEE-754 bits rather than converting
- * the result through an integer cast. This gives the runtime probe an exact
+ * the result through an integer cast. This gives the runtime an exact
  * bit-for-bit validation point, including signed zero and unusual float bit
- * patterns.</p>
+ * patterns. The kernel is deliberately 1D/batch-shaped from the start so the
+ * same runtime path can later evaluate real F32-safe worldgen islands.</p>
  */
 public final class MetalF32Compiler {
 
-    public static final String ENTRY_POINT = "c2me_dfc_f32_probe";
+    public static final String ENTRY_POINT = "c2me_dfc_f32_batch";
 
     private MetalF32Compiler() {
     }
@@ -62,11 +63,8 @@ public final class MetalF32Compiler {
 
                 kernel void %s(device uint *output [[buffer(0)]],
                                uint gid [[thread_position_in_grid]]) {
-                    if (gid != 0u) {
-                        return;
-                    }
                     const float value = %s;
-                    output[0] = as_type<uint>(value);
+                    output[gid] = as_type<uint>(value);
                 }
                 """.formatted(ENTRY_POINT, expression);
 
