@@ -79,10 +79,11 @@ public final class MetalRuntime {
 
             validateGeneratedF32Probe();
             validateExplicitF32Boundary();
+            MetalSplineRuntimeProbe.validate(batchExecutor);
 
             state = State.AVAILABLE;
             LOGGER.info(
-                    "Metal backend initialized on '{}' (DFC F32 -> MSL, {}-element batches, explicit F64->F32 boundary, bit-exact readback, pipeline/buffer reuse verified)",
+                    "Metal backend initialized on '{}' (DFC F32 -> MSL, {}-element batches, explicit F64->F32 boundary, nested spline differential probe, pipeline/buffer reuse verified)",
                     deviceName,
                     COMPILER_PROBE_BATCH_SIZE
             );
