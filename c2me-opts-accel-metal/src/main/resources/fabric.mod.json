@@ -10,6 +10,9 @@
       "com.ishland.c2me.opts.accel.metal.ModuleEntryPoint"
     ]
   },
+  "mixins": [
+    "c2me-opts-accel-metal.mixins.json"
+  ],
   "depends": {
     "minecraft": "*",
     "fabricloader": "*",

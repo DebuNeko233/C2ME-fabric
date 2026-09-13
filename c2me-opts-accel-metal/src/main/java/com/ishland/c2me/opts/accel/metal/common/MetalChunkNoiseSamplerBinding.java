@@ -42,7 +42,9 @@ import java.util.Objects;
  *
  * <p>Binding is intentionally forbidden once the interpolation loop has begun,
  * and blended samplers are rejected because Metal exact boundary roots have no
- * blending fallback.</p>
+ * blending fallback. Binding also requires the sampler's actual-density cache
+ * size to remain unchanged: all wrapper stubs referenced by a discovered
+ * boundary must already have been resolved during normal sampler construction.</p>
  */
 public final class MetalChunkNoiseSamplerBinding {
 
@@ -64,7 +66,14 @@ public final class MetalChunkNoiseSamplerBinding {
             throw new IllegalStateException("Metal DFC boundary roots do not provide a blending fallback");
         }
 
+        int actualDensityCacheSize = accessor.getActualDensityFunctionCache().size();
         DensityFunction.DensityFunctionVisitor visitor = accessor::invokeGetActualDensityFunction;
-        return programs.bindToSamplerVisitor(visitor);
+        MetalWorldgenSplinePrograms.BoundPrograms boundPrograms = programs.bindToSamplerVisitor(visitor);
+        int reboundCacheSize = accessor.getActualDensityFunctionCache().size();
+        if (reboundCacheSize != actualDensityCacheSize) {
+            throw new IllegalStateException("Metal boundary binding created new ChunkNoiseSampler density wrappers: "
+                    + actualDensityCacheSize + " -> " + reboundCacheSize);
+        }
+        return boundPrograms;
     }
 }

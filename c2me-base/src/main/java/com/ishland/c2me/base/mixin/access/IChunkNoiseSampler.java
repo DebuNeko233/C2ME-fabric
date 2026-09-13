@@ -33,6 +33,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.gen.Invoker;
 
+import java.util.Map;
+
 @Mixin(ChunkNoiseSampler.class)
 public interface IChunkNoiseSampler {
 
@@ -86,6 +88,9 @@ public interface IChunkNoiseSampler {
 
     @Invoker
     DensityFunction invokeGetActualDensityFunction(DensityFunction function);
+
+    @Accessor
+    Map<DensityFunction, DensityFunction> getActualDensityFunctionCache();
 
     @Accessor
     int getHorizontalBiomeEnd();
