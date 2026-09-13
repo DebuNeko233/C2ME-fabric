@@ -25,6 +25,7 @@
 package com.ishland.c2me.opts.accel.metal.common;
 
 import com.ishland.c2me.opts.accel.metal.common.compiler.GeneratedMetalSource;
+import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlan;
 import com.ishland.c2me.opts.dfc.common.ast.AstNode;
 import org.lwjgl.system.MemoryUtil;
 
@@ -70,7 +71,7 @@ final class MetalBatchExecutor implements AutoCloseable {
             // cannot accidentally satisfy validation if a thread was skipped.
             MemoryUtil.memSet(output.contents(), 0xA5, outputBytes);
             this.dispatch(pipeline, output, elementCount);
-            return readBits(output, elementCount);
+            return readBits(output, 0, elementCount);
         } finally {
             this.bufferPool.release(output);
         }
@@ -96,7 +97,58 @@ final class MetalBatchExecutor implements AutoCloseable {
                 MemoryUtil.memPutInt(io.contents() + (long) i * Integer.BYTES, inputBits[i]);
             }
             this.dispatch(pipeline, io, inputBits.length);
-            return readBits(io, inputBits.length);
+            return readBits(io, 0, inputBits.length);
+        } finally {
+            this.bufferPool.release(io);
+        }
+    }
+
+    /**
+     * Execute a planned hybrid spline batch. Boundary values are slot-major and
+     * have already crossed the explicit exact/F64 -> F32 host conversion point.
+     * Input and output share one pooled MTLStorageModeShared allocation.
+     */
+    int[] executeF32SplineBits(
+            GeneratedMetalSource generatedSource,
+            MetalF32SplinePlan plan,
+            float[] boundaryValues,
+            int sampleCount
+    ) {
+        this.validateF32Program(generatedSource);
+        Objects.requireNonNull(plan, "plan");
+        Objects.requireNonNull(boundaryValues, "boundaryValues");
+        if (sampleCount < 0) {
+            throw new IllegalArgumentException("Metal spline sample count must be non-negative");
+        }
+        if (sampleCount == 0) {
+            if (boundaryValues.length != 0) {
+                throw new IllegalArgumentException("Zero-sample Metal spline batch must have no boundary values");
+            }
+            return new int[0];
+        }
+
+        int boundaryCount = plan.boundaryInputs().size();
+        int boundaryElements = Math.multiplyExact(boundaryCount, sampleCount);
+        if (boundaryValues.length != boundaryElements) {
+            throw new IllegalArgumentException("Expected " + boundaryElements
+                    + " slot-major Metal spline boundary values, got " + boundaryValues.length);
+        }
+
+        int totalElements = Math.addExact(boundaryElements, sampleCount);
+        int totalBytes = Math.multiplyExact(totalElements, Integer.BYTES);
+        int outputOffsetBytes = Math.multiplyExact(boundaryElements, Integer.BYTES);
+        long pipeline = this.pipelineCache.getOrCompile(generatedSource);
+        MetalSharedBufferPool.SharedBuffer io = this.bufferPool.acquire(totalBytes);
+        try {
+            for (int i = 0; i < boundaryElements; i++) {
+                MemoryUtil.memPutInt(
+                        io.contents() + (long) i * Integer.BYTES,
+                        Float.floatToRawIntBits(boundaryValues[i])
+                );
+            }
+            MemoryUtil.memSet(io.contents() + outputOffsetBytes, 0xA5, (long) sampleCount * Integer.BYTES);
+            this.dispatch(pipeline, io, sampleCount);
+            return readBits(io, boundaryElements, sampleCount);
         } finally {
             this.bufferPool.release(io);
         }
@@ -134,10 +186,11 @@ final class MetalBatchExecutor implements AutoCloseable {
         }
     }
 
-    private static int[] readBits(MetalSharedBufferPool.SharedBuffer buffer, int elementCount) {
+    private static int[] readBits(MetalSharedBufferPool.SharedBuffer buffer, int elementOffset, int elementCount) {
         int[] result = new int[elementCount];
+        long base = buffer.contents() + (long) elementOffset * Integer.BYTES;
         for (int i = 0; i < elementCount; i++) {
-            result[i] = MemoryUtil.memGetInt(buffer.contents() + (long) i * Integer.BYTES);
+            result[i] = MemoryUtil.memGetInt(base + (long) i * Integer.BYTES);
         }
         return result;
     }
