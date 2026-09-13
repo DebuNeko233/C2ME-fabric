@@ -31,6 +31,7 @@ import com.ishland.c2me.opts.accel.opencl.common.compiler.emitters.misc.CLBlockS
 import com.ishland.c2me.opts.accel.opencl.common.compiler.GeneratedCLSource;
 import com.ishland.c2me.opts.accel.opencl.common.compiler.OpenCLCGen;
 import com.ishland.c2me.opts.accel.opencl.common.workarounds.Workarounds;
+import com.ishland.c2me.opts.dfc.common.worldgen.WorldgenRegionGeometry;
 import com.ishland.c2me.rewrites.chunksystem.common.ChunkLoadingContext;
 import com.ishland.flowsched.util.Assertions;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -131,12 +132,18 @@ public class CLServerBatchedBiomeNoiseContext {
 
             ChunkGeneratorSettings settings = this.generator.getSettings().value();
 
-            int verticalCellBlockCount = settings.generationShapeConfig().verticalCellBlockCount();
             Assertions.assertTrue(Math.floorDiv(16, settings.generationShapeConfig().horizontalCellBlockCount()) * settings.generationShapeConfig().horizontalCellBlockCount() == 16);
-            int horizontalCellsCount = Math.floorDiv(16, settings.generationShapeConfig().horizontalCellBlockCount()) * BATCH_SIZE;
-            int verticalCellsCount = Math.floorDiv(settings.generationShapeConfig().height(), verticalCellBlockCount);
-            int horizontalSize = 16 * BATCH_SIZE;
-            int verticalSize = verticalCellsCount * verticalCellBlockCount;
+            WorldgenRegionGeometry regionGeometry = new WorldgenRegionGeometry(
+                    this.startingPos.x(),
+                    this.startingPos.z(),
+                    BATCH_SIZE,
+                    settings.generationShapeConfig().minimumY(),
+                    settings.generationShapeConfig().height(),
+                    settings.generationShapeConfig().horizontalCellBlockCount(),
+                    settings.generationShapeConfig().verticalCellBlockCount()
+            );
+            int horizontalSize = regionGeometry.horizontalBlockSize();
+            int verticalSize = regionGeometry.verticalBlockSize();
 
             int biomeHeight;
             HeightLimitView heightLimitView;
@@ -157,7 +164,7 @@ public class CLServerBatchedBiomeNoiseContext {
             );
             CLUtil.checkCLError(errorCodeRet);
 
-            int biomeOutCount = biomeHeight * 4 * BATCH_SIZE * 4 * BATCH_SIZE;
+            int biomeOutCount = biomeHeight * regionGeometry.biomeSizeX() * regionGeometry.biomeSizeZ();
             CLBufferCache.BufferEntry biomeOutBuffer = deviceWithProgram.device().getBufferCache().allocate(
                     CLBufferCache.Type.GEN_BATCHING_BIOME_RX,
                     biomeOutCount * 4, // 4 bytes per uint32_t, 4x4 xz axis
@@ -191,8 +198,8 @@ public class CLServerBatchedBiomeNoiseContext {
             if (generatedCLSource.getBiomeMappings() != null) {
                 try (MemoryStack _ = MemoryStack.stackPush()) {
                     PointerBuffer workSize = stack.mallocPointer(3);
-                    workSize.put(0, 4 * BATCH_SIZE);
-                    workSize.put(1, 4 * BATCH_SIZE);
+                    workSize.put(0, regionGeometry.biomeSizeX());
+                    workSize.put(1, regionGeometry.biomeSizeZ());
                     workSize.put(2, biomeHeight);
                     workSize.rewind();
 
@@ -211,11 +218,11 @@ public class CLServerBatchedBiomeNoiseContext {
                     CLUtil.checkCLError(CL12.clSetKernelArg1p(kernel, 0, deviceWithProgram.programConstDataBuffer()));
                     CLUtil.checkCLError(CL12.clSetKernelArg1p(kernel, 1, rwBuffer.buffer()));
                     CLUtil.checkCLError(CL12.clSetKernelArg1p(kernel, 2, biomeOutBuffer.buffer()));
-                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 3, BiomeCoords.fromBlock(this.startingPos.getStartX())));
-                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 4, BiomeCoords.fromBlock(this.startingPos.getStartZ())));
+                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 3, regionGeometry.startBiomeX()));
+                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 4, regionGeometry.startBiomeZ()));
                     CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 5, BiomeCoords.fromBlock(heightLimitView.getBottomY())));
-                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 6, 4 * BATCH_SIZE));
-                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 7, 4 * BATCH_SIZE));
+                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 6, regionGeometry.biomeSizeX()));
+                    CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 7, regionGeometry.biomeSizeZ()));
                     CLUtil.checkCLError(CL12.clSetKernelArg1i(kernel, 8, biomeHeight));
                     CLUtil.checkCLError(CL12.clEnqueueNDRangeKernel(commandQueue.getCommandQueue(), kernel, 3, null, workSize, local, eventWaitList, event));
                     eventsToRelease.add(event.get(0));
@@ -237,9 +244,9 @@ public class CLServerBatchedBiomeNoiseContext {
 
             try (MemoryStack _ = MemoryStack.stackPush()) {
                 PointerBuffer globalWorkSize = stack.callocPointer(3);
-                globalWorkSize.put(0, horizontalCellsCount + 1);
-                globalWorkSize.put(2, verticalCellsCount + 1);
-                globalWorkSize.put(1, horizontalCellsCount + 1);
+                globalWorkSize.put(0, regionGeometry.interpolatorSizeX());
+                globalWorkSize.put(2, regionGeometry.interpolatorSizeY());
+                globalWorkSize.put(1, regionGeometry.interpolatorSizeZ());
                 PointerBuffer localWorkSize;
                 if (deviceWithProgram.device().getMetadata().supportsNonUniformWorkgroups) {
                     localWorkSize = stack.callocPointer(3);
@@ -293,8 +300,8 @@ public class CLServerBatchedBiomeNoiseContext {
             if (generatedCLSource.getCache2dPrefills() != 0) {
                 try (MemoryStack _ = MemoryStack.stackPush()) {
                     PointerBuffer globalWorkSize = stack.callocPointer(3);
-                    globalWorkSize.put(0, horizontalSize);
-                    globalWorkSize.put(1, horizontalSize);
+                    globalWorkSize.put(0, regionGeometry.cache2dSizeX());
+                    globalWorkSize.put(1, regionGeometry.cache2dSizeZ());
                     globalWorkSize.put(2, generatedCLSource.getCache2dPrefills());
 
                     PointerBuffer localWorkSize = stack.callocPointer(3);
@@ -315,9 +322,9 @@ public class CLServerBatchedBiomeNoiseContext {
 
             try (MemoryStack _ = MemoryStack.stackPush()) {
                 PointerBuffer globalWorkSize = stack.callocPointer(3);
-                globalWorkSize.put(0, horizontalSize);
-                globalWorkSize.put(2, verticalSize);
-                globalWorkSize.put(1, horizontalSize);
+                globalWorkSize.put(0, regionGeometry.horizontalBlockSize());
+                globalWorkSize.put(2, regionGeometry.verticalBlockSize());
+                globalWorkSize.put(1, regionGeometry.horizontalBlockSize());
 
                 PointerBuffer localWorkSize = stack.callocPointer(3);
                 localWorkSize.put(0, 16);
