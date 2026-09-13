@@ -197,6 +197,23 @@ public final class MetalSamplerBindingIntegrationProbe {
                 probeIndex + 1, comparedValues, total);
     }
 
+    public static void assertDifferentialObserved() {
+        int samplers = SAMPLERS.get();
+        int programs = BOUND_PROGRAMS.get();
+        int values = DIFFERENTIAL_VALUES.get();
+        if (samplers == 0) {
+            throw new IllegalStateException("Metal sampler boundary differential did not bind any real sampler");
+        }
+        if (programs == 0) {
+            throw new IllegalStateException("Metal sampler boundary differential bound no real spline programs");
+        }
+        if (values == 0) {
+            throw new IllegalStateException("Metal sampler boundary differential completed pre-generation without comparing any raw F32 values");
+        }
+        LOGGER.info("Metal sampler boundary differential gate passed with {} bound sampler(s), {} bound program(s), {} raw F32 value(s)",
+                samplers, programs, values);
+    }
+
     public static int samplerCount() {
         return SAMPLERS.get();
     }
