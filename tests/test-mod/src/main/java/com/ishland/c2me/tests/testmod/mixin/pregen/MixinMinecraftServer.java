@@ -106,7 +106,11 @@ public abstract class MixinMinecraftServer extends ReentrantThreadExecutor<Serve
             while (!future.isDone() && isRunning()) {
                 if (!c2metest$runAsyncTask()) LockSupport.parkNanos("waiting for tasks", 100000L);
             }
-            if (!isRunning()) LOGGER.error("Exiting due to server stopping");
+            if (!isRunning()) {
+                LOGGER.error("Exiting due to server stopping");
+            } else {
+                future.join();
+            }
             for (ServerWorld world : this.worlds.values()) {
                 world.getChunkManager().tick(() -> true, false);
             }
