@@ -43,11 +43,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Development-server integration probe for the sampler-bound exact Metal path.
  *
  * <p>No native Metal API is used here. The existing C2ME pre-generation test can
- * therefore exercise this path on Linux CI. The original NoiseRouter is compiled
- * once per identity, while only a small bounded number of real ChunkNoiseSampler
- * instances are rebound through the cache/interpolator ownership bridge. This
- * keeps the probe representative without turning every generated chunk into a
- * second generated-DFC binding workload.</p>
+ * therefore exercise this path on Linux CI. Both NoiseRouter compilation and
+ * real ChunkNoiseSampler rebinding are explicitly bounded, keeping the probe
+ * representative without turning every generated chunk into a second DFC
+ * compilation/binding workload.</p>
  *
  * <p>At one real interpolation cell the probe also evaluates original,
  * sampler-bound Minecraft spline-location functions first and the generated
@@ -58,9 +57,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class MetalSamplerBindingIntegrationProbe {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetalSamplerBindingIntegrationProbe.class);
+    private static final int MAX_COMPILED_ROUTERS = 4;
     private static final int MAX_BOUND_SAMPLERS = 4;
     private static final int MAX_DIFFERENTIAL_CELLS = 1;
     private static final Map<NoiseRouter, MetalWorldgenSplinePrograms> PROGRAMS = new IdentityHashMap<>();
+    private static final AtomicInteger COMPILE_CLAIMS = new AtomicInteger();
     private static final AtomicInteger BIND_CLAIMS = new AtomicInteger();
     private static final AtomicInteger SAMPLERS = new AtomicInteger();
     private static final AtomicInteger BOUND_PROGRAMS = new AtomicInteger();
@@ -86,13 +87,17 @@ public final class MetalSamplerBindingIntegrationProbe {
         synchronized (PROGRAMS) {
             programs = PROGRAMS.get(originalNoiseRouter);
             if (programs == null) {
+                if (!claim(COMPILE_CLAIMS, MAX_COMPILED_ROUTERS)) {
+                    return null;
+                }
                 programs = MetalWorldgenSplinePrograms.compile(originalNoiseRouter);
                 PROGRAMS.put(originalNoiseRouter, programs);
-                LOGGER.info("Metal sampler-binding test compiled {} spline program(s) for a NoiseRouter", programs.size());
+                LOGGER.info("Metal sampler-binding test compiled router #{} with {} spline program(s)",
+                        COMPILE_CLAIMS.get(), programs.size());
             }
         }
 
-        if (programs.size() == 0 || !claimSamplerBinding()) {
+        if (programs.size() == 0 || !claim(BIND_CLAIMS, MAX_BOUND_SAMPLERS)) {
             return null;
         }
 
@@ -104,14 +109,14 @@ public final class MetalSamplerBindingIntegrationProbe {
         return boundPrograms;
     }
 
-    private static boolean claimSamplerBinding() {
+    private static boolean claim(AtomicInteger counter, int maximum) {
         int claim;
         do {
-            claim = BIND_CLAIMS.get();
-            if (claim >= MAX_BOUND_SAMPLERS) {
+            claim = counter.get();
+            if (claim >= maximum) {
                 return false;
             }
-        } while (!BIND_CLAIMS.compareAndSet(claim, claim + 1));
+        } while (!counter.compareAndSet(claim, claim + 1));
         return true;
     }
 
