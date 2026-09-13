@@ -38,16 +38,20 @@ final class MetalNative {
 
     private static final String METAL_FRAMEWORK = "/System/Library/Frameworks/Metal.framework/Metal";
     private static final String FOUNDATION_FRAMEWORK = "/System/Library/Frameworks/Foundation.framework/Foundation";
+    private static final String CORE_GRAPHICS_FRAMEWORK = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
 
     private final SharedLibrary metalLibrary;
     @SuppressWarnings("FieldCanBeLocal")
     private final SharedLibrary foundationLibrary;
+    @SuppressWarnings("FieldCanBeLocal")
+    private final SharedLibrary coreGraphicsLibrary;
     private final long objcMsgSend;
     private final long mtlCreateSystemDefaultDevice;
 
-    private MetalNative(SharedLibrary metalLibrary, SharedLibrary foundationLibrary) {
+    private MetalNative(SharedLibrary metalLibrary, SharedLibrary foundationLibrary, SharedLibrary coreGraphicsLibrary) {
         this.metalLibrary = metalLibrary;
         this.foundationLibrary = foundationLibrary;
+        this.coreGraphicsLibrary = coreGraphicsLibrary;
         this.objcMsgSend = ObjCRuntime.getLibrary().getFunctionAddress("objc_msgSend");
         this.mtlCreateSystemDefaultDevice = this.metalLibrary.getFunctionAddress("MTLCreateSystemDefaultDevice");
 
@@ -60,11 +64,13 @@ final class MetalNative {
     }
 
     static MetalNative load() {
-        // Loading Foundation explicitly makes NSString/NSAutoreleasePool available
-        // even for a headless dedicated server process.
+        // Foundation provides NSString/NSAutoreleasePool. Apple documents that
+        // CoreGraphics must be linked explicitly for command-line/headless macOS
+        // processes before MTLCreateSystemDefaultDevice can return a default GPU.
         SharedLibrary foundation = Library.loadNative(MetalNative.class, "c2me-metal", FOUNDATION_FRAMEWORK);
+        SharedLibrary coreGraphics = Library.loadNative(MetalNative.class, "c2me-metal", CORE_GRAPHICS_FRAMEWORK);
         SharedLibrary metal = Library.loadNative(MetalNative.class, "c2me-metal", METAL_FRAMEWORK);
-        return new MetalNative(metal, foundation);
+        return new MetalNative(metal, foundation, coreGraphics);
     }
 
     long createSystemDefaultDevice() {
