@@ -20,6 +20,7 @@ import com.ishland.c2me.base.mixin.access.IThreadedAnvilChunkStorage;
 import com.ishland.c2me.opts.accel.opencl.common.ducks.TACSExtension;
 import com.ishland.c2me.opts.accel.opencl.common.gen.CLServerBatchedBiomeNoiseContext;
 import com.ishland.c2me.opts.accel.opencl.common.gen.CLServerWorldContext;
+import com.ishland.c2me.opts.dfc.common.worldgen.WorldgenRegionGeometry;
 import com.ishland.c2me.rewrites.chunksystem.common.ChunkLoadingContext;
 import com.ishland.c2me.rewrites.chunksystem.common.ChunkState;
 import com.ishland.c2me.rewrites.chunksystem.common.NewChunkStatus;
@@ -74,7 +75,7 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
         ChunkPos pos = context.holder().getKey();
         final Chunk startingChunk = context.holder().getItem().get().chunk();
 
-        if (!CLServerBatchedBiomeNoiseContext.isAligned(pos.x(), pos.z()) || startingChunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
+        if (!WorldgenRegionGeometry.isAligned(pos.x(), pos.z(), CLServerBatchedBiomeNoiseContext.BATCH_SIZE) || startingChunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
             return Completable.complete();
         }
 
@@ -184,7 +185,7 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
         ChunkPos pos = holder.getKey();
         final Chunk chunk = holder.getItem().get().chunk();
         // depend on BATCH_SIZExBATCH_SIZE if aligned, nothing otherwise
-        if (CLServerBatchedBiomeNoiseContext.isAligned(pos.x(), pos.z()) && !chunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
+        if (WorldgenRegionGeometry.isAligned(pos.x(), pos.z(), CLServerBatchedBiomeNoiseContext.BATCH_SIZE) && !chunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
             return getGenDeps(pos);
         } else {
             return EMPTY_DEPENDENCIES;
