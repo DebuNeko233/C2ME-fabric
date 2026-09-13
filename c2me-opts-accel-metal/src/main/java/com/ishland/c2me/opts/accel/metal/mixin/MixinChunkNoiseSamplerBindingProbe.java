@@ -31,6 +31,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.world.gen.chunk.ChunkNoiseSampler;
 import net.minecraft.world.gen.densityfunction.DensityFunction;
 import net.minecraft.world.gen.noise.NoiseRouter;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -76,7 +77,18 @@ public abstract class MixinChunkNoiseSamplerBindingProbe {
         );
     }
 
-    @Inject(method = "onSampledCellCorners", at = @At("RETURN"))
+    @Inject(
+            method = "onSampledCellCorners",
+            at = @At(
+                    value = "FIELD",
+                    target = "Lnet/minecraft/world/gen/chunk/ChunkNoiseSampler;isSamplingForCaches:Z",
+                    opcode = Opcodes.PUTFIELD,
+                    ordinal = 1,
+                    shift = At.Shift.BEFORE
+            ),
+            require = 1,
+            expect = 1
+    )
     private void c2me$metal$probeBoundaryDifferential(int cellY, int cellZ, CallbackInfo ci) {
         if (this.c2me$metal$boundPrograms != null) {
             MetalSamplerBindingIntegrationProbe.probeInterpolationCell(
