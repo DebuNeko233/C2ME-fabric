@@ -67,6 +67,34 @@ public record WorldgenRegionGeometry(
         return Math.floorMod(chunkX, chunkCount) == 0 && Math.floorMod(chunkZ, chunkCount) == 0;
     }
 
+    /**
+     * Require this descriptor to describe the exact generation shape expected by
+     * a backend consumer. This keeps a scheduler-created region from being reused
+     * accidentally with another world's or generator's cell geometry.
+     */
+    public void requireGenerationShape(
+            int minimumY,
+            int height,
+            int horizontalCellBlockCount,
+            int verticalCellBlockCount
+    ) {
+        if (this.minimumY != minimumY
+                || this.height != height
+                || this.horizontalCellBlockCount != horizontalCellBlockCount
+                || this.verticalCellBlockCount != verticalCellBlockCount) {
+            throw new IllegalArgumentException(
+                    "Worldgen region generation shape mismatch: descriptor=[minimumY=" + this.minimumY
+                            + ", height=" + this.height
+                            + ", horizontalCellBlockCount=" + this.horizontalCellBlockCount
+                            + ", verticalCellBlockCount=" + this.verticalCellBlockCount
+                            + "], requested=[minimumY=" + minimumY
+                            + ", height=" + height
+                            + ", horizontalCellBlockCount=" + horizontalCellBlockCount
+                            + ", verticalCellBlockCount=" + verticalCellBlockCount + "]"
+            );
+        }
+    }
+
     private static int horizontalBlockSize(int chunkCount) {
         return Math.multiplyExact(chunkCount, 16);
     }

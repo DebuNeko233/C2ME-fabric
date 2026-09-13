@@ -27,6 +27,7 @@ package com.ishland.c2me.opts.accel.metal.common;
 import com.ishland.c2me.opts.dfc.common.worldgen.WorldgenRegionGeometry;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -105,6 +106,26 @@ class WorldgenRegionGeometryTest {
         assertFalse(WorldgenRegionGeometry.isAligned(-1, 6, 2));
         assertThrows(IllegalArgumentException.class, () ->
                 WorldgenRegionGeometry.isAligned(0, 0, 0));
+    }
+
+    @Test
+    void validatesConsumerGenerationShape() {
+        WorldgenRegionGeometry geometry = new WorldgenRegionGeometry(
+                -8, 12,
+                4,
+                -64, 384,
+                4, 8
+        );
+
+        assertDoesNotThrow(() -> geometry.requireGenerationShape(-64, 384, 4, 8));
+        assertThrows(IllegalArgumentException.class, () ->
+                geometry.requireGenerationShape(-63, 384, 4, 8));
+        assertThrows(IllegalArgumentException.class, () ->
+                geometry.requireGenerationShape(-64, 320, 4, 8));
+        assertThrows(IllegalArgumentException.class, () ->
+                geometry.requireGenerationShape(-64, 384, 2, 8));
+        assertThrows(IllegalArgumentException.class, () ->
+                geometry.requireGenerationShape(-64, 384, 4, 4));
     }
 
     @Test
