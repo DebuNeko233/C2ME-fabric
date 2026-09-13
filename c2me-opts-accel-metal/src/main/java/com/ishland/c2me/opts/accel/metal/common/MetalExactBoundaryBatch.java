@@ -49,16 +49,19 @@ import java.util.Objects;
  * construction. Results remain F64 until the explicit Java {@code (float)}
  * assignment into the slot-major output buffer.</p>
  *
- * <p>The compiled entry is retained so a real ChunkNoiseSampler visitor can be
- * applied to all generated arguments before evaluation. This mirrors
- * {@code CompiledDensityFunction.apply}: wrapping/cache arguments are rebound to
- * the visitor-produced runtime objects rather than accidentally evaluating the
- * original NoiseRouter wrappers as permanently uncached delegates.</p>
+ * <p>The compiled entry is retained because a future real-world integration
+ * still needs DFC argument rebinding. That rebinding is deliberately not exposed
+ * as a normal runtime operation: current ChunkNoiseSampler cache/interpolator
+ * implementations make {@code c2me$withDelegate} mutate the live wrapper in
+ * place. Rebinding a second generated entry to an already-live wrapper after
+ * sampler construction could therefore overwrite the delegate used by normal
+ * world generation.</p>
  *
- * <p>The generated roots intentionally have no blending fallback. A future real
- * world-generation call site must therefore keep the existing no-blending
- * capability gate before using this evaluator, just as it must before sending
- * the corresponding F32 island to Metal.</p>
+ * <p>The safe integration point must either bind in a construction order where
+ * normal DFC setup owns the final delegate, or introduce a non-mutating cache
+ * view. Until then, world-scoped templates remain unbound. The generated roots
+ * also intentionally have no blending fallback, so any eventual offload must
+ * retain the existing no-blending capability gate.</p>
  */
 final class MetalExactBoundaryBatch {
 
@@ -100,13 +103,16 @@ final class MetalExactBoundaryBatch {
     }
 
     /**
-     * Re-instantiates the generated DFC class with the same argument visitor
-     * mechanism used by {@code CompiledDensityFunction.apply}. A real
-     * ChunkNoiseSampler integration must bind the boundary batch through the
-     * same visitor that turns NoiseRouter wrappers into its runtime cache and
-     * interpolation objects before evaluating any coordinates.
+     * Low-level construction-time rebinding primitive. Do not pass a visitor
+     * that returns cache/interpolator wrappers already owned by a live sampler:
+     * generated cache fields call {@code c2me$withDelegate}, and current runtime
+     * wrappers mutate themselves in place.
+     *
+     * <p>This method remains package-private so a future integration can use it
+     * only after establishing an ownership-safe construction order or a
+     * non-mutating wrapper strategy.</p>
      */
-    MetalExactBoundaryBatch bind(DensityFunction.DensityFunctionVisitor visitor) {
+    MetalExactBoundaryBatch bindForConstruction(DensityFunction.DensityFunctionVisitor visitor) {
         Objects.requireNonNull(visitor, "visitor");
         if (this.compiledEntry == null) {
             return this;
