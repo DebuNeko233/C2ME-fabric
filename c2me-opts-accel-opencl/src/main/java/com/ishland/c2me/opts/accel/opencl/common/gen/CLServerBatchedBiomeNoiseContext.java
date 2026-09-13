@@ -87,15 +87,28 @@ public class CLServerBatchedBiomeNoiseContext {
     }
 
     private final ChunkPos startingPos;
+    private final WorldgenRegionGeometry regionGeometry;
     private final CLServerWorldContext worldContext;
     private final NoiseChunkGenerator generator;
     private final NoiseConfig noiseConfig;
 
-    public CLServerBatchedBiomeNoiseContext(ChunkPos startingPos, CLServerWorldContext worldContext, NoiseChunkGenerator generator, NoiseConfig noiseConfig) {
+    public CLServerBatchedBiomeNoiseContext(
+            ChunkPos startingPos,
+            WorldgenRegionGeometry regionGeometry,
+            CLServerWorldContext worldContext,
+            NoiseChunkGenerator generator,
+            NoiseConfig noiseConfig
+    ) {
         this.startingPos = Objects.requireNonNull(startingPos);
+        this.regionGeometry = Objects.requireNonNull(regionGeometry);
         this.worldContext = Objects.requireNonNull(worldContext);
         this.generator = Objects.requireNonNull(generator);
         this.noiseConfig = Objects.requireNonNull(noiseConfig);
+        if (this.regionGeometry.startChunkX() != this.startingPos.x()
+                || this.regionGeometry.startChunkZ() != this.startingPos.z()
+                || this.regionGeometry.chunkCount() != BATCH_SIZE) {
+            throw new IllegalArgumentException("OpenCL worldgen region does not match batch origin/size");
+        }
     }
 
     public CompletableFuture<Void> execute(ChunkLoadingContext context, BoundedRegionArray<ProtoChunk> chunks, BoundedRegionArray<StructureAccessor> structureAccessors) {
@@ -133,15 +146,13 @@ public class CLServerBatchedBiomeNoiseContext {
             ChunkGeneratorSettings settings = this.generator.getSettings().value();
 
             Assertions.assertTrue(Math.floorDiv(16, settings.generationShapeConfig().horizontalCellBlockCount()) * settings.generationShapeConfig().horizontalCellBlockCount() == 16);
-            WorldgenRegionGeometry regionGeometry = new WorldgenRegionGeometry(
-                    this.startingPos.x(),
-                    this.startingPos.z(),
-                    BATCH_SIZE,
+            this.regionGeometry.requireGenerationShape(
                     settings.generationShapeConfig().minimumY(),
                     settings.generationShapeConfig().height(),
                     settings.generationShapeConfig().horizontalCellBlockCount(),
                     settings.generationShapeConfig().verticalCellBlockCount()
             );
+            WorldgenRegionGeometry regionGeometry = this.regionGeometry;
             int horizontalSize = regionGeometry.horizontalBlockSize();
             int verticalSize = regionGeometry.verticalBlockSize();
 

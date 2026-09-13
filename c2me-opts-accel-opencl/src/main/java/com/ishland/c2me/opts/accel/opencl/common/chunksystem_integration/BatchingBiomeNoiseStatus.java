@@ -169,7 +169,13 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
                     regionGeometry.chunkCount(),
                     context.schedulingManager(),
                     () -> {
-                        CLServerBatchedBiomeNoiseContext batchedBiomeNoiseContext = new CLServerBatchedBiomeNoiseContext(pos, clContext, noiseChunkGenerator, chunkGenerationContext.world().getChunkManager().getNoiseConfig());
+                        CLServerBatchedBiomeNoiseContext batchedBiomeNoiseContext = new CLServerBatchedBiomeNoiseContext(
+                                pos,
+                                regionGeometry,
+                                clContext,
+                                noiseChunkGenerator,
+                                chunkGenerationContext.world().getChunkManager().getNoiseConfig()
+                        );
                         return batchedBiomeNoiseContext.execute(context, boundedRegionArray, structureAccessors);
                     }
             ));
