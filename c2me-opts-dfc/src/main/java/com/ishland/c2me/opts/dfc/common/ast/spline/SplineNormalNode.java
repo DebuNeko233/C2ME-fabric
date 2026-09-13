@@ -26,6 +26,8 @@ package com.ishland.c2me.opts.dfc.common.ast.spline;
 
 import com.ishland.c2me.opts.dfc.common.ast.AstNode;
 import com.ishland.c2me.opts.dfc.common.ast.AstTransformer;
+import net.minecraft.world.gen.densityfunction.DensityFunction;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -33,12 +35,29 @@ import java.util.Objects;
 public class SplineNormalNode implements AstNode {
 
     public final AstNode locationFunction;
+    /**
+     * Optional original Minecraft density function used only as differential-test
+     * reference metadata. It is deliberately excluded from equality/hash/codegen
+     * semantics so optimizers continue to treat this node exactly as before.
+     */
+    public final @Nullable DensityFunction referenceLocationFunction;
     public final float[] locations;
     public final AstNode[] values;
     public final float[] derivatives;
 
     public SplineNormalNode(AstNode locationFunction, float[] locations, AstNode[] values, float[] derivatives) {
+        this(locationFunction, null, locations, values, derivatives);
+    }
+
+    public SplineNormalNode(
+            AstNode locationFunction,
+            @Nullable DensityFunction referenceLocationFunction,
+            float[] locations,
+            AstNode[] values,
+            float[] derivatives
+    ) {
         this.locationFunction = Objects.requireNonNull(locationFunction);
+        this.referenceLocationFunction = referenceLocationFunction;
         this.locations = Objects.requireNonNull(locations);
         this.values = Objects.requireNonNull(values);
         this.derivatives = Objects.requireNonNull(derivatives);
@@ -69,7 +88,13 @@ public class SplineNormalNode implements AstNode {
         if (!changed) {
             return transformer.transform(this);
         } else {
-            return transformer.transform(new SplineNormalNode(transformedLocationFunction, this.locations.clone(), transformedValues, this.derivatives.clone()));
+            return transformer.transform(new SplineNormalNode(
+                    transformedLocationFunction,
+                    this.referenceLocationFunction,
+                    this.locations.clone(),
+                    transformedValues,
+                    this.derivatives.clone()
+            ));
         }
     }
 
@@ -118,7 +143,7 @@ public class SplineNormalNode implements AstNode {
         if (that.values.length != length)
             return false;
         for (int i = 0; i < length; i++) {
-            AstNode e1 = this.values[i];
+            AstNode e1 = values[i];
             AstNode e2 = that.values[i];
             if (!e1.equals(e2))
                 return false;

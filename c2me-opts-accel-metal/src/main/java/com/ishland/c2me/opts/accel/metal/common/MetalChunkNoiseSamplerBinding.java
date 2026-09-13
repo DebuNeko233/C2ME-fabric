@@ -25,9 +25,12 @@
 package com.ishland.c2me.opts.accel.metal.common;
 
 import com.ishland.c2me.base.mixin.access.IChunkNoiseSampler;
+import com.ishland.c2me.opts.dfc.common.ducks.IFastCacheLike;
 import net.minecraft.world.gen.chunk.ChunkNoiseSampler;
 import net.minecraft.world.gen.densityfunction.DensityFunction;
 
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -66,14 +69,29 @@ public final class MetalChunkNoiseSamplerBinding {
             throw new IllegalStateException("Metal DFC boundary roots do not provide a blending fallback");
         }
 
-        int actualDensityCacheSize = accessor.getActualDensityFunctionCache().size();
+        Map<DensityFunction, DensityFunction> actualDensityCache = accessor.getActualDensityFunctionCache();
+        int actualDensityCacheSize = actualDensityCache.size();
+        IdentityHashMap<IFastCacheLike, DensityFunction> liveDelegates = new IdentityHashMap<>();
+        for (DensityFunction densityFunction : actualDensityCache.values()) {
+            if (densityFunction instanceof IFastCacheLike fastCacheLike) {
+                liveDelegates.put(fastCacheLike, fastCacheLike.c2me$getDelegate());
+            }
+        }
+
         DensityFunction.DensityFunctionVisitor visitor = accessor::invokeGetActualDensityFunction;
         MetalWorldgenSplinePrograms.BoundPrograms boundPrograms = programs.bindToSamplerVisitor(visitor);
-        int reboundCacheSize = accessor.getActualDensityFunctionCache().size();
+
+        int reboundCacheSize = actualDensityCache.size();
         if (reboundCacheSize != actualDensityCacheSize) {
             throw new IllegalStateException("Metal boundary binding created new ChunkNoiseSampler density wrappers: "
                     + actualDensityCacheSize + " -> " + reboundCacheSize);
         }
+        liveDelegates.forEach((fastCacheLike, expectedDelegate) -> {
+            if (fastCacheLike.c2me$getDelegate() != expectedDelegate) {
+                throw new IllegalStateException("Metal sampler binding mutated live DFC cache delegate: "
+                        + fastCacheLike.c2me$describeCacheLike());
+            }
+        });
         return boundPrograms;
     }
 }

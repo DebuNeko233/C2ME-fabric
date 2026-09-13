@@ -25,6 +25,8 @@
 package com.ishland.c2me.opts.accel.metal.common.compiler;
 
 import com.ishland.c2me.opts.dfc.common.ast.AstNode;
+import net.minecraft.world.gen.densityfunction.DensityFunction;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 import java.util.Objects;
@@ -111,10 +113,21 @@ public record MetalF32SplinePlan(
     }
 
     /**
-     * Exact/F64 AST producer for one host-rounded F32 input slot. Repeated spline
-     * nodes that reference the same AST object share a slot.
+     * Exact/F64 AST producer for one host-rounded F32 input slot. The optional
+     * reference producer is the original Minecraft density function captured
+     * before AST optimization and is used only by sampler-bound differential
+     * validation. Repeated spline nodes that reference the same AST object share
+     * a slot.
      */
-    public record BoundaryInput(int index, AstNode producer) {
+    public record BoundaryInput(
+            int index,
+            AstNode producer,
+            @Nullable DensityFunction referenceProducer
+    ) {
+
+        public BoundaryInput(int index, AstNode producer) {
+            this(index, producer, null);
+        }
 
         public BoundaryInput {
             if (index < 0) {

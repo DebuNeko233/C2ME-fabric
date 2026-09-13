@@ -27,6 +27,8 @@ package com.ishland.c2me.opts.accel.metal.common.compiler;
 import com.ishland.c2me.opts.dfc.common.ast.AstNode;
 import com.ishland.c2me.opts.dfc.common.ast.misc.ConstantF32Node;
 import com.ishland.c2me.opts.dfc.common.ast.spline.SplineNormalNode;
+import net.minecraft.world.gen.densityfunction.DensityFunction;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -95,7 +97,10 @@ public final class MetalF32SplinePlanner {
                 throw unsupported(path, spline, "invalid spline array lengths");
             }
 
-            int boundaryIndex = this.boundaryIndex(spline.locationFunction);
+            int boundaryIndex = this.boundaryIndex(
+                    spline.locationFunction,
+                    spline.referenceLocationFunction
+            );
             List<MetalF32SplinePlan.PlannedValue> values = new ArrayList<>(spline.values.length);
             for (int i = 0; i < spline.values.length; i++) {
                 AstNode value = Objects.requireNonNull(spline.values[i], "spline.values[" + i + "]");
@@ -114,15 +119,25 @@ public final class MetalF32SplinePlanner {
             );
         }
 
-        private int boundaryIndex(AstNode producer) {
+        private int boundaryIndex(AstNode producer, @Nullable DensityFunction referenceProducer) {
             Integer existing = this.boundaryIndices.get(producer);
             if (existing != null) {
+                if (referenceProducer != null) {
+                    MetalF32SplinePlan.BoundaryInput current = this.boundaryInputs.get(existing);
+                    if (current.referenceProducer() == null) {
+                        this.boundaryInputs.set(existing, new MetalF32SplinePlan.BoundaryInput(
+                                existing,
+                                producer,
+                                referenceProducer
+                        ));
+                    }
+                }
                 return existing;
             }
 
             int index = this.boundaryInputs.size();
             this.boundaryIndices.put(producer, index);
-            this.boundaryInputs.add(new MetalF32SplinePlan.BoundaryInput(index, producer));
+            this.boundaryInputs.add(new MetalF32SplinePlan.BoundaryInput(index, producer, referenceProducer));
             return index;
         }
     }

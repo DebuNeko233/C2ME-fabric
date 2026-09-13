@@ -25,6 +25,7 @@
 package com.ishland.c2me.opts.accel.metal.mixin;
 
 import com.ishland.c2me.opts.accel.metal.common.MetalSamplerBindingIntegrationProbe;
+import com.ishland.c2me.opts.accel.metal.common.MetalWorldgenSplinePrograms;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.world.gen.chunk.ChunkNoiseSampler;
@@ -44,6 +45,9 @@ public abstract class MixinChunkNoiseSamplerBindingProbe {
 
     @Unique
     private NoiseRouter c2me$metal$probeNoiseRouter;
+
+    @Unique
+    private MetalWorldgenSplinePrograms.BoundPrograms c2me$metal$boundPrograms;
 
     @WrapOperation(
             method = "<init>",
@@ -66,9 +70,19 @@ public abstract class MixinChunkNoiseSamplerBindingProbe {
         if (this.c2me$metal$probeNoiseRouter == null) {
             throw new IllegalStateException("Metal sampler-binding test failed to capture the NoiseRouter");
         }
-        MetalSamplerBindingIntegrationProbe.probe(
+        this.c2me$metal$boundPrograms = MetalSamplerBindingIntegrationProbe.bind(
                 (ChunkNoiseSampler) (Object) this,
                 this.c2me$metal$probeNoiseRouter
         );
+    }
+
+    @Inject(method = "onSampledCellCorners", at = @At("RETURN"))
+    private void c2me$metal$probeBoundaryDifferential(int cellY, int cellZ, CallbackInfo ci) {
+        if (this.c2me$metal$boundPrograms != null) {
+            MetalSamplerBindingIntegrationProbe.probeInterpolationCell(
+                    (ChunkNoiseSampler) (Object) this,
+                    this.c2me$metal$boundPrograms
+            );
+        }
     }
 }

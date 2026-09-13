@@ -24,7 +24,11 @@
 
 package com.ishland.c2me.opts.accel.metal.common;
 
+import com.ishland.c2me.opts.dfc.common.ast.EvalType;
+import com.ishland.c2me.opts.dfc.common.ducks.IDfcObjectCacheCapable;
+import com.ishland.c2me.opts.dfc.common.ducks.IPreloadedCoordinates;
 import com.ishland.c2me.opts.dfc.common.ducks.NoiseRouterExtension;
+import com.ishland.c2me.opts.dfc.common.gen.jvm.util.DfcObjectCache;
 import net.minecraft.world.gen.chunk.ChunkNoiseSampler;
 import net.minecraft.world.gen.noise.NoiseRouter;
 import org.slf4j.Logger;
@@ -42,18 +46,29 @@ import java.util.concurrent.atomic.AtomicInteger;
  * therefore exercise this path on Linux CI: the original NoiseRouter is compiled
  * once per identity, then every real ChunkNoiseSampler is bound through the same
  * cache/interpolator ownership bridge intended for future region dispatch.</p>
+ *
+ * <p>At a bounded number of real interpolation cells the probe also evaluates
+ * original, sampler-bound Minecraft spline-location functions first and the
+ * generated exact DFC boundary roots second. Their explicit F64 -> F32 results
+ * must match bit-for-bit for every reference-backed boundary slot.</p>
  */
 public final class MetalSamplerBindingIntegrationProbe {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetalSamplerBindingIntegrationProbe.class);
+    private static final int MAX_DIFFERENTIAL_CELLS = 64;
     private static final Map<NoiseRouter, MetalWorldgenSplinePrograms> PROGRAMS = new IdentityHashMap<>();
     private static final AtomicInteger SAMPLERS = new AtomicInteger();
     private static final AtomicInteger BOUND_PROGRAMS = new AtomicInteger();
+    private static final AtomicInteger DIFFERENTIAL_CELLS = new AtomicInteger();
+    private static final AtomicInteger DIFFERENTIAL_VALUES = new AtomicInteger();
 
     private MetalSamplerBindingIntegrationProbe() {
     }
 
-    public static void probe(ChunkNoiseSampler sampler, NoiseRouter routedNoiseRouter) {
+    public static MetalWorldgenSplinePrograms.BoundPrograms bind(
+            ChunkNoiseSampler sampler,
+            NoiseRouter routedNoiseRouter
+    ) {
         Objects.requireNonNull(sampler, "sampler");
         Objects.requireNonNull(routedNoiseRouter, "routedNoiseRouter");
 
@@ -79,6 +94,80 @@ public final class MetalSamplerBindingIntegrationProbe {
             LOGGER.info("Metal sampler-binding test bound sampler #{} with {} spline program(s)",
                     samplerCount, boundPrograms.programs().size());
         }
+        return boundPrograms;
+    }
+
+    public static void probeInterpolationCell(
+            ChunkNoiseSampler sampler,
+            MetalWorldgenSplinePrograms.BoundPrograms boundPrograms
+    ) {
+        Objects.requireNonNull(sampler, "sampler");
+        Objects.requireNonNull(boundPrograms, "boundPrograms");
+        if (boundPrograms.programs().isEmpty()) {
+            return;
+        }
+
+        int probeIndex = DIFFERENTIAL_CELLS.getAndIncrement();
+        if (probeIndex >= MAX_DIFFERENTIAL_CELLS) {
+            return;
+        }
+
+        IPreloadedCoordinates coordinates = (IPreloadedCoordinates) (Object) sampler;
+        int[] x = coordinates.c2me$getXArray();
+        int[] y = coordinates.c2me$getYArray();
+        int[] z = coordinates.c2me$getZArray();
+        DfcObjectCache cache = ((IDfcObjectCacheCapable) (Object) sampler).c2me$getDfcObjectCache();
+
+        int comparedValues = 0;
+        for (MetalWorldgenSplinePrograms.BoundProgram program : boundPrograms.programs()) {
+            boolean[] mask = program.referenceBoundaryMask();
+            boolean hasReference = false;
+            for (boolean present : mask) {
+                hasReference |= present;
+            }
+            if (!hasReference) {
+                continue;
+            }
+
+            // Reference first: establish exactly the cache/interpolator state that
+            // normal world generation observes at this interpolation phase.
+            float[] reference = program.evaluateReferenceBoundarySlotMajor(
+                    x, y, z, EvalType.INTERPOLATION, cache
+            );
+            float[] exact = program.evaluateBoundarySlotMajor(
+                    x, y, z, EvalType.INTERPOLATION, cache
+            );
+
+            int sampleCount = x.length;
+            for (int slot = 0; slot < mask.length; slot++) {
+                if (!mask[slot]) {
+                    continue;
+                }
+                int base = slot * sampleCount;
+                for (int sample = 0; sample < sampleCount; sample++) {
+                    int referenceBits = Float.floatToRawIntBits(reference[base + sample]);
+                    int exactBits = Float.floatToRawIntBits(exact[base + sample]);
+                    if (referenceBits != exactBits) {
+                        throw new IllegalStateException("Metal sampler boundary differential mismatch for "
+                                + program.binding() + "/" + program.path()
+                                + " slot=" + slot
+                                + " sample=" + sample
+                                + " xyz=(" + x[sample] + "," + y[sample] + "," + z[sample] + ")"
+                                + " reference=0x" + Integer.toHexString(referenceBits)
+                                + " exact=0x" + Integer.toHexString(exactBits));
+                    }
+                    comparedValues++;
+                }
+            }
+        }
+
+        if (comparedValues != 0) {
+            int total = DIFFERENTIAL_VALUES.addAndGet(comparedValues);
+            if (probeIndex < 4) {
+                LOGGER.info("Metal sampler boundary differential cell #{} matched {} raw F32 value(s), total={}",
+                        probeIndex + 1, comparedValues, total);
+            }
+        }
     }
 
     public static int samplerCount() {
@@ -87,5 +176,9 @@ public final class MetalSamplerBindingIntegrationProbe {
 
     public static int boundProgramCount() {
         return BOUND_PROGRAMS.get();
+    }
+
+    public static int differentialValueCount() {
+        return DIFFERENTIAL_VALUES.get();
     }
 }

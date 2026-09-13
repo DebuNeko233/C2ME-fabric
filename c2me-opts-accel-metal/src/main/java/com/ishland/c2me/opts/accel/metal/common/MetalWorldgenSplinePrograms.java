@@ -73,7 +73,8 @@ public final class MetalWorldgenSplinePrograms {
                     discovered.path(),
                     plan,
                     MetalF32SplineCompiler.compile(plan),
-                    MetalExactBoundaryBatch.compile(plan)
+                    MetalExactBoundaryBatch.compile(plan),
+                    MetalReferenceBoundaryBatch.fromPlan(plan)
             ));
         }
         return new MetalWorldgenSplinePrograms(templates);
@@ -106,7 +107,8 @@ public final class MetalWorldgenSplinePrograms {
                     template.path(),
                     template.plan(),
                     template.generatedSource(),
-                    template.boundaries().bindWithCacheViews(visitor)
+                    template.boundaries().bindWithCacheViews(visitor),
+                    template.references().bind(visitor)
             ));
         }
         return new BoundPrograms(programs);
@@ -146,19 +148,22 @@ public final class MetalWorldgenSplinePrograms {
         private final MetalF32SplinePlan plan;
         private final GeneratedMetalSource generatedSource;
         private final MetalExactBoundaryBatch boundaries;
+        private final MetalReferenceBoundaryBatch references;
 
         private BoundProgram(
                 String binding,
                 String path,
                 MetalF32SplinePlan plan,
                 GeneratedMetalSource generatedSource,
-                MetalExactBoundaryBatch boundaries
+                MetalExactBoundaryBatch boundaries,
+                MetalReferenceBoundaryBatch references
         ) {
             this.binding = Objects.requireNonNull(binding, "binding");
             this.path = Objects.requireNonNull(path, "path");
             this.plan = Objects.requireNonNull(plan, "plan");
             this.generatedSource = Objects.requireNonNull(generatedSource, "generatedSource");
             this.boundaries = Objects.requireNonNull(boundaries, "boundaries");
+            this.references = Objects.requireNonNull(references, "references");
         }
 
         public String binding() {
@@ -181,6 +186,10 @@ public final class MetalWorldgenSplinePrograms {
             return this.boundaries.boundaryCount();
         }
 
+        public boolean[] referenceBoundaryMask() {
+            return this.references.referenceMask();
+        }
+
         public float[] evaluateBoundarySlotMajor(
                 int[] x,
                 int[] y,
@@ -201,6 +210,16 @@ public final class MetalWorldgenSplinePrograms {
         ) {
             this.boundaries.fillSlotMajor(x, y, z, type, cache, output);
         }
+
+        public float[] evaluateReferenceBoundarySlotMajor(
+                int[] x,
+                int[] y,
+                int[] z,
+                EvalType type,
+                DfcObjectCache cache
+        ) {
+            return this.references.evaluateSlotMajor(x, y, z, type, cache);
+        }
     }
 
     private record ProgramTemplate(
@@ -208,7 +227,8 @@ public final class MetalWorldgenSplinePrograms {
             String path,
             MetalF32SplinePlan plan,
             GeneratedMetalSource generatedSource,
-            MetalExactBoundaryBatch boundaries
+            MetalExactBoundaryBatch boundaries,
+            MetalReferenceBoundaryBatch references
     ) {
         private ProgramTemplate {
             Objects.requireNonNull(binding, "binding");
@@ -216,6 +236,7 @@ public final class MetalWorldgenSplinePrograms {
             Objects.requireNonNull(plan, "plan");
             Objects.requireNonNull(generatedSource, "generatedSource");
             Objects.requireNonNull(boundaries, "boundaries");
+            Objects.requireNonNull(references, "references");
         }
     }
 }
