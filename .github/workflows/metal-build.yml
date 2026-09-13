@@ -52,8 +52,17 @@ jobs:
           cache-read-only: false
           cache-cleanup: never
 
-      - name: Compile shared DFC, OpenCL and Metal Java paths
-        run: ./gradlew :c2me-opts-dfc:compileJava :c2me-opts-accel-opencl:compileJava :c2me-opts-accel-metal:compileJava --stacktrace
+      - name: Compile shared DFC, OpenCL and Metal Java ABI
+        # OpenCL consumes c2me-opts-natives-math through its namedElements jar.
+        # That module's processResources task packages every CMake target and is
+        # unrelated to this Java ABI check, so skip only native resource packaging.
+        run: >-
+          ./gradlew
+          :c2me-opts-dfc:compileJava
+          :c2me-opts-accel-opencl:compileJava
+          :c2me-opts-accel-metal:compileJava
+          -x :c2me-opts-natives-math:processResources
+          --stacktrace
         env:
           GPR_MAVEN_USER: ${{ github.actor }}
           GPR_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
