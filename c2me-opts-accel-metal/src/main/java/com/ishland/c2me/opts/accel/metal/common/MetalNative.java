@@ -137,11 +137,25 @@ final class MetalNative {
         Objects.requireNonNull(entryPoint, "entryPoint");
 
         long pool = this.newAutoreleasePool();
+        long compileOptions = NULL;
         long library = NULL;
         long function = NULL;
         try {
             long source = this.newNSString(sourceCode);
-            library = this.sendPointer(device, "newLibraryWithSource:options:error:", source, NULL, NULL);
+
+            // Metal's default compile configuration enables fast-math
+            // transformations. C2ME world-generation values must not silently
+            // change because of reassociation/approximation, so use the broadly
+            // available compatibility property. On current Metal versions,
+            // fastMathEnabled=false maps to safe math mode with precise FP32
+            // functions; on older systems it disables the same fast-math path.
+            compileOptions = this.newObject("MTLCompileOptions");
+            if (compileOptions == NULL) {
+                throw new IllegalStateException("MTLCompileOptions is unavailable");
+            }
+            this.sendVoidBoolean(compileOptions, "setFastMathEnabled:", false);
+
+            library = this.sendPointer(device, "newLibraryWithSource:options:error:", source, compileOptions, NULL);
             if (library == NULL) {
                 return NULL;
             }
@@ -159,6 +173,9 @@ final class MetalNative {
             }
             if (library != NULL) {
                 this.releaseObject(library);
+            }
+            if (compileOptions != NULL) {
+                this.releaseObject(compileOptions);
             }
             if (pool != NULL) {
                 this.sendVoid(pool, "drain");
@@ -224,7 +241,11 @@ final class MetalNative {
     }
 
     private long newAutoreleasePool() {
-        long clazz = ObjCRuntime.objc_getClass("NSAutoreleasePool");
+        return this.newObject("NSAutoreleasePool");
+    }
+
+    private long newObject(String className) {
+        long clazz = ObjCRuntime.objc_getClass(className);
         if (clazz == NULL) {
             return NULL;
         }
@@ -276,6 +297,10 @@ final class MetalNative {
 
     private void sendVoidPointer(long receiver, String selector, long arg0) {
         JNI.invokePPPV(receiver, this.selector(selector), arg0, this.objcMsgSend);
+    }
+
+    private void sendVoidBoolean(long receiver, String selector, boolean value) {
+        JNI.invokePPV(receiver, this.selector(selector), value, this.objcMsgSend);
     }
 
     private long sendNUInteger(long receiver, String selector) {
