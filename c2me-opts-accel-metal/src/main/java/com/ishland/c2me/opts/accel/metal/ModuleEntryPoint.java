@@ -35,10 +35,11 @@ public final class ModuleEntryPoint implements ModInitializer {
             .comment("""
                     Enable the experimental Metal acceleration backend on macOS.
 
-                    The backend is ignored on non-macOS platforms and falls back
-                    cleanly when Metal is unavailable.
+                    The backend currently validates the native Metal compute path.
+                    World-generation dispatch remains disabled until Metal kernels
+                    are output-validated against the exact C2ME/vanilla path.
                     """)
-            .getBoolean(true, false);
+            .getBoolean(false, false);
 
     @Override
     public void onInitialize() {
