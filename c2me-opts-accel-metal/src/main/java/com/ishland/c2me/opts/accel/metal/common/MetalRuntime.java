@@ -51,7 +51,7 @@ public final class MetalRuntime {
 
         if (Platform.get() != Platform.MACOSX) {
             state = State.UNSUPPORTED_PLATFORM;
-            LOGGER.info("Metal acceleration backend is only available on macOS; keeping the normal C2ME path");
+            LOGGER.debug("Metal acceleration backend is only available on macOS; keeping the normal C2ME path");
             return;
         }
 
@@ -74,9 +74,12 @@ public final class MetalRuntime {
             if (probePipeline == NULL) {
                 throw new IllegalStateException("Metal failed to compile the C2ME compute probe pipeline");
             }
+            if (!nativeApi.executeProbe(device, commandQueue, probePipeline)) {
+                throw new IllegalStateException("Metal compute probe did not produce the expected GPU result");
+            }
 
             state = State.AVAILABLE;
-            LOGGER.info("Metal backend initialized on '{}' (MSL compute pipeline verified)", deviceName);
+            LOGGER.info("Metal backend initialized on '{}' (MSL compile, dispatch and readback verified)", deviceName);
         } catch (Throwable t) {
             state = State.FAILED;
             LOGGER.warn("Failed to initialize the experimental Metal backend; keeping the normal C2ME path", t);
