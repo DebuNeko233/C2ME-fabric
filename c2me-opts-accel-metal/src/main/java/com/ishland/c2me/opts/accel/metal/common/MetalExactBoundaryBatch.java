@@ -26,6 +26,7 @@ package com.ishland.c2me.opts.accel.metal.common;
 
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32SplinePlan;
 import com.ishland.c2me.opts.dfc.common.ast.EvalType;
+import com.ishland.c2me.opts.dfc.common.ducks.IFastCacheLike;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.BytecodeGen;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.CompiledEntry;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.SubCompiledDensityFunction;
@@ -34,6 +35,7 @@ import com.ishland.c2me.opts.dfc.common.gen.jvm.util.DfcObjectCache;
 import com.ishland.c2me.opts.dfc.common.gen.jvm.vif.EachApplierVanillaInterface;
 import net.minecraft.world.gen.densityfunction.DensityFunction;
 
+import java.util.IdentityHashMap;
 import java.util.Objects;
 
 /**
@@ -55,6 +57,11 @@ import java.util.Objects;
  * by {@link MetalFastCacheView}. The view shares cache state but owns the Metal
  * generated delegate independently, so generated {@code c2me$withDelegate}
  * calls cannot replace the delegate used by normal world generation.</p>
+ *
+ * <p>Binding additionally snapshots every live fast-cache delegate by identity
+ * and verifies it after generated-entry construction. If a future DFC change
+ * makes this supposedly non-mutating path replace a live world-generation
+ * delegate, binding fails immediately before any boundary evaluation occurs.</p>
  *
  * <p>The generated roots intentionally have no blending fallback. Any real
  * world-generation caller must retain the existing no-blending eligibility gate
@@ -109,9 +116,15 @@ final class MetalExactBoundaryBatch {
             return this;
         }
 
+        IdentityHashMap<IFastCacheLike, DensityFunction> liveDelegates = new IdentityHashMap<>();
         ArgumentVisitor argumentVisitor = next -> {
             if (next instanceof DensityFunction densityFunction) {
                 DensityFunction rebound = densityFunction.apply(visitor);
+                if (rebound instanceof IFastCacheLike fastCacheLike
+                        && !(rebound instanceof MetalFastCacheView)
+                        && !liveDelegates.containsKey(fastCacheLike)) {
+                    liveDelegates.put(fastCacheLike, fastCacheLike.c2me$getDelegate());
+                }
                 return MetalFastCacheView.wrap(rebound);
             }
             if (next instanceof DensityFunction.Noise noise) {
@@ -121,6 +134,12 @@ final class MetalExactBoundaryBatch {
         };
 
         CompiledEntry rebound = this.compiledEntry.newInstance(this.compiledEntry.getArgs(), argumentVisitor);
+        liveDelegates.forEach((fastCacheLike, expectedDelegate) -> {
+            if (fastCacheLike.c2me$getDelegate() != expectedDelegate) {
+                throw new IllegalStateException("Metal boundary binding mutated live DFC cache delegate: "
+                        + fastCacheLike.c2me$describeCacheLike());
+            }
+        });
         return new MetalExactBoundaryBatch(rebound);
     }
 
