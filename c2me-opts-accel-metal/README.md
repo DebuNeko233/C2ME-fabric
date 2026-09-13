@@ -7,26 +7,30 @@ Experimental native Metal compute backend for C2ME on macOS.
 The module currently provides the runtime foundation required by a real Metal world-generation backend:
 
 - macOS-only activation with clean fallback on every other platform;
-- direct loading of the system Metal and Foundation frameworks;
+- direct loading of the system Metal, Foundation and CoreGraphics frameworks;
 - `MTLCreateSystemDefaultDevice` device discovery;
 - Metal command-queue creation;
 - runtime Metal Shading Language compilation;
-- compute-pipeline creation and validation using a small probe kernel;
+- compute-pipeline creation;
+- real compute dispatch through `MTLComputeCommandEncoder`;
+- shared-buffer GPU write + CPU readback validation using a small probe kernel;
 - Intel macOS and Apple Silicon LWJGL native packaging.
 
-The runtime bridge uses LWJGL's Objective-C/JNI helpers. It does not require an extra JNI dylib and does not require Java FFM native-access flags.
+The runtime bridge uses LWJGL's Objective-C/JNI helpers and its bundled LibFFI support for Objective-C calls that pass `MTLSize` structures by value. It does not require an extra JNI dylib and does not require Java FFM native-access flags.
+
+The backend is marked available only after the probe shader is compiled, dispatched on the GPU, completed and read back with the expected result. A failure at any stage leaves the normal C2ME path active.
 
 ## World-generation integration status
 
 This milestone deliberately does **not** redirect chunk generation yet. The existing OpenCL accelerator contains a substantial DensityFunction-to-OpenCL compiler, generated constant/dynamic data ABI, cache-prefill kernels, device scheduling and chunk-system integration. Those pieces need a Metal-aware implementation rather than a blind OpenCL-C-to-MSL text conversion.
 
-The largest compatibility issue is floating-point semantics: the existing accelerator emits both F32 and F64 density-function code, while Metal Shading Language does not expose a native `double` type on Apple GPUs. The Metal backend must therefore keep exactness-sensitive F64 work on an exact path (or implement a validated representation) instead of silently converting world generation to F32 and changing terrain.
+The largest compatibility issue is floating-point semantics: the existing accelerator emits both F32 and F64 density-function code, while Metal Shading Language does not provide a straightforward native F64 shader path comparable to the existing OpenCL implementation. The Metal backend must therefore keep exactness-sensitive F64 work on an exact path (or implement a validated representation) instead of silently converting world generation to F32 and changing terrain.
 
 ## Next implementation stages
 
 1. Extract/share backend-neutral generated-data metadata from the OpenCL compiler.
 2. Add an MSL code generator for F32-safe DensityFunction AST nodes.
-3. Add Metal buffers, pipeline caching and batched dispatch.
+3. Add reusable Metal buffers, pipeline caching and batched dispatch.
 4. Integrate an initial F32-safe world-generation workload behind capability checks.
 5. Add CPU/OpenCL-vs-Metal output-difference tests before widening kernel coverage.
 6. Only enable Metal world-generation dispatch when the selected kernel is proven output-compatible.
