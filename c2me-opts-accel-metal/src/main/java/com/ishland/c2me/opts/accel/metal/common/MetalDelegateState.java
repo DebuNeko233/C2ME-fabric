@@ -24,29 +24,27 @@
 
 package com.ishland.c2me.opts.accel.metal.common;
 
-import org.junit.jupiter.api.Test;
+import java.util.Objects;
 
-import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+/**
+ * Immutable generated-delegate state used by {@link MetalFastCacheView}.
+ *
+ * <p>This class deliberately has no Minecraft dependencies so the ownership
+ * invariant can be unit-tested without bootstrapping Minecraft registries.</p>
+ */
+final class MetalDelegateState<T> {
 
-class MetalFastCacheViewTest {
+    private final T delegate;
 
-    @Test
-    void delegateRebindingDoesNotMutatePreviousState() {
-        Object original = new Object();
-        Object replacement = new Object();
-        MetalDelegateState<Object> initial = new MetalDelegateState<>(original);
-
-        MetalDelegateState<Object> rebound = initial.withDelegate(replacement);
-
-        assertNotSame(initial, rebound);
-        assertSame(original, initial.delegate());
-        assertSame(replacement, rebound.delegate());
+    MetalDelegateState(T delegate) {
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
     }
 
-    @Test
-    void delegateStateRejectsNull() {
-        assertThrows(NullPointerException.class, () -> new MetalDelegateState<>(null));
+    T delegate() {
+        return this.delegate;
+    }
+
+    MetalDelegateState<T> withDelegate(T delegate) {
+        return new MetalDelegateState<>(delegate);
     }
 }

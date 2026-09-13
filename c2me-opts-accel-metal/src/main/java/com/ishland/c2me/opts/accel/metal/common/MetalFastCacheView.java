@@ -52,11 +52,19 @@ import java.util.Objects;
 final class MetalFastCacheView implements IFastCacheLike {
 
     private final IFastCacheLike backing;
-    private final DensityFunction delegate;
+    private final MetalDelegateState<DensityFunction> delegateState;
 
     private MetalFastCacheView(IFastCacheLike backing, DensityFunction delegate) {
+        this(backing, new MetalDelegateState<>(delegate));
+    }
+
+    private MetalFastCacheView(IFastCacheLike backing, MetalDelegateState<DensityFunction> delegateState) {
         this.backing = Objects.requireNonNull(backing, "backing");
-        this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.delegateState = Objects.requireNonNull(delegateState, "delegateState");
+    }
+
+    private DensityFunction delegate() {
+        return this.delegateState.delegate();
     }
 
     static DensityFunction wrap(DensityFunction densityFunction) {
@@ -81,7 +89,7 @@ final class MetalFastCacheView implements IFastCacheLike {
             return cached;
         }
 
-        double value = this.delegate.sample(pos);
+        double value = this.delegate().sample(pos);
         this.backing.c2me$cache(x, y, z, type, value);
         return value;
     }
@@ -102,7 +110,7 @@ final class MetalFastCacheView implements IFastCacheLike {
             )) {
                 return;
             }
-            this.delegate.fill(densities, applier);
+            this.delegate().fill(densities, applier);
             this.backing.c2me$cache(
                     densities,
                     vanillaInterface.getX(),
@@ -113,17 +121,18 @@ final class MetalFastCacheView implements IFastCacheLike {
             return;
         }
 
-        this.delegate.fill(densities, applier);
+        this.delegate().fill(densities, applier);
     }
 
     @Override
     public DensityFunction applyInternal(DensityFunctionVisitor visitor) {
         Objects.requireNonNull(visitor, "visitor");
-        DensityFunction applied = this.delegate.applyInternal(visitor);
-        if (applied == this.delegate) {
+        DensityFunction delegate = this.delegate();
+        DensityFunction applied = delegate.applyInternal(visitor);
+        if (applied == delegate) {
             return this;
         }
-        return new MetalFastCacheView(this.backing, applied);
+        return new MetalFastCacheView(this.backing, this.delegateState.withDelegate(applied));
     }
 
     @Override
@@ -134,17 +143,17 @@ final class MetalFastCacheView implements IFastCacheLike {
 
     @Override
     public double minValue() {
-        return this.delegate.minValue();
+        return this.delegate().minValue();
     }
 
     @Override
     public double maxValue() {
-        return this.delegate.maxValue();
+        return this.delegate().maxValue();
     }
 
     @Override
     public CodecHolder<? extends DensityFunction> getCodecHolder() {
-        return this.delegate.getCodecHolder();
+        return this.delegate().getCodecHolder();
     }
 
     @Override
@@ -179,11 +188,11 @@ final class MetalFastCacheView implements IFastCacheLike {
 
     @Override
     public DensityFunction c2me$getDelegate() {
-        return this.delegate;
+        return this.delegate();
     }
 
     @Override
     public DensityFunction c2me$withDelegate(DensityFunction delegate) {
-        return new MetalFastCacheView(this.backing, delegate);
+        return new MetalFastCacheView(this.backing, this.delegateState.withDelegate(delegate));
     }
 }
