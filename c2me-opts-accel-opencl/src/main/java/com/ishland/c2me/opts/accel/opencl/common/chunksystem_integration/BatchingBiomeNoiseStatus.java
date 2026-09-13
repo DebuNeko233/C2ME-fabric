@@ -84,6 +84,11 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
             return Completable.complete();
         }
 
+        CLServerWorldContext clContext = ((TACSExtension) context.tacs()).c2me$getCLContext();
+        if (clContext == null) {
+            return Completable.complete();
+        }
+
         final var generationShapeConfig = noiseChunkGenerator.getSettings().value().generationShapeConfig();
         final WorldgenRegionGeometry regionGeometry = new WorldgenRegionGeometry(
                 pos.x(),
@@ -94,11 +99,6 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
                 generationShapeConfig.horizontalCellBlockCount(),
                 generationShapeConfig.verticalCellBlockCount()
         );
-
-        CLServerWorldContext clContext = ((TACSExtension) context.tacs()).c2me$getCLContext();
-        if (clContext == null) {
-            return Completable.complete();
-        }
 
         Long2ReferenceOpenHashMap<ChunkHolder> holderCache = new Long2ReferenceOpenHashMap<>();
         Long2ReferenceFunction<ChunkHolder> getHolder0 = posx -> context.theChunkSystem().getHolder(ChunkPos.fromLong(posx)).getUserData().get();
