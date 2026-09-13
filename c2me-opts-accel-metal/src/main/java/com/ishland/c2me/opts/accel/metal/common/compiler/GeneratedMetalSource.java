@@ -25,18 +25,25 @@
 package com.ishland.c2me.opts.accel.metal.common.compiler;
 
 import com.ishland.c2me.opts.dfc.common.ast.AstNode;
+import com.ishland.c2me.opts.dfc.common.gen.GeneratedProgramMetadata;
 
 import java.util.Objects;
 
 public record GeneratedMetalSource(
         String source,
         String entryPoint,
-        AstNode.ReturnType returnType
+        AstNode.ReturnType returnType,
+        GeneratedProgramMetadata metadata
 ) {
 
     public GeneratedMetalSource {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(entryPoint, "entryPoint");
         Objects.requireNonNull(returnType, "returnType");
+        Objects.requireNonNull(metadata, "metadata");
+    }
+
+    public GeneratedMetalSource(String source, String entryPoint, AstNode.ReturnType returnType) {
+        this(source, entryPoint, returnType, GeneratedProgramMetadata.empty());
     }
 }
