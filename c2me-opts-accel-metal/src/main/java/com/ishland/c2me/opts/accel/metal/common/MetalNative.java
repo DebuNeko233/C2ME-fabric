@@ -42,9 +42,9 @@ import static org.lwjgl.system.APIUtil.apiCreateCIF;
 import static org.lwjgl.system.APIUtil.apiCreateStruct;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
-import static org.lwjgl.system.MemoryUtil.POINTER_SIZE;
 import static org.lwjgl.system.MemoryUtil.memPutAddress;
 import static org.lwjgl.system.MemoryUtil.memPutLong;
+import static org.lwjgl.system.Pointer.POINTER_SIZE;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_pointer;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_ulong;
 import static org.lwjgl.system.libffi.LibFFI.ffi_type_void;
@@ -56,9 +56,6 @@ final class MetalNative {
     private static final String CORE_GRAPHICS_FRAMEWORK = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
     private static final long MTL_COMMAND_BUFFER_STATUS_COMPLETED = 4L;
 
-    // Objective-C methods that take MTLSize by value cannot be expressed by the
-    // fixed JNI call signatures exposed by LWJGL. LibFFI provides the exact ABI
-    // required by objc_msgSend without adding a custom JNI library.
     private static final FFIType MTL_SIZE_TYPE = apiCreateStruct(ffi_type_ulong, ffi_type_ulong, ffi_type_ulong);
     private static final FFICIF SET_BUFFER_CIF = apiCreateCIF(
             ffi_type_void,
@@ -105,9 +102,6 @@ final class MetalNative {
     }
 
     static MetalNative load() {
-        // Foundation provides NSString/NSAutoreleasePool. Apple documents that
-        // CoreGraphics must be linked explicitly for command-line/headless macOS
-        // processes before MTLCreateSystemDefaultDevice can return a default GPU.
         SharedLibrary foundation = Library.loadNative(MetalNative.class, "c2me-metal", FOUNDATION_FRAMEWORK);
         SharedLibrary coreGraphics = Library.loadNative(MetalNative.class, "c2me-metal", CORE_GRAPHICS_FRAMEWORK);
         SharedLibrary metal = Library.loadNative(MetalNative.class, "c2me-metal", METAL_FRAMEWORK);
@@ -143,12 +137,6 @@ final class MetalNative {
         try {
             long source = this.newNSString(sourceCode);
 
-            // Metal's default compile configuration enables fast-math
-            // transformations. C2ME world-generation values must not silently
-            // change because of reassociation/approximation, so use the broadly
-            // available compatibility property. On current Metal versions,
-            // fastMathEnabled=false maps to safe math mode with precise FP32
-            // functions; on older systems it disables the same fast-math path.
             compileOptions = this.newObject("MTLCompileOptions");
             if (compileOptions == NULL) {
                 throw new IllegalStateException("MTLCompileOptions is unavailable");
@@ -187,7 +175,6 @@ final class MetalNative {
         if (length <= 0L) {
             throw new IllegalArgumentException("Metal buffer length must be positive");
         }
-        // MTLResourceStorageModeShared is encoded as zero in MTLResourceOptions.
         return this.sendPointerNUIntNUInt(device, "newBufferWithLength:options:", length, 0L);
     }
 
