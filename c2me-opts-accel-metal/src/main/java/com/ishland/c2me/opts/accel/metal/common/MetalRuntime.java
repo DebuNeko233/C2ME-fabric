@@ -25,6 +25,7 @@
 package com.ishland.c2me.opts.accel.metal.common;
 
 import com.ishland.c2me.opts.accel.metal.common.compiler.GeneratedMetalSource;
+import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32BoundaryCompiler;
 import com.ishland.c2me.opts.accel.metal.common.compiler.MetalF32Compiler;
 import com.ishland.c2me.opts.dfc.common.ast.misc.ConstantF32Node;
 import org.lwjgl.system.Platform;
@@ -76,28 +77,12 @@ public final class MetalRuntime {
             }
             batchExecutor = new MetalBatchExecutor(nativeApi, device, commandQueue);
 
-            float compilerProbeValue = Float.intBitsToFloat(COMPILER_PROBE_BITS);
-            GeneratedMetalSource generatedProbe = MetalF32Compiler.compile(new ConstantF32Node(compilerProbeValue));
-
-            // First dispatch compiles the pipeline and allocates a shared buffer.
-            validateProbeBatch(batchExecutor.executeF32Bits(generatedProbe, COMPILER_PROBE_BATCH_SIZE));
-            int pipelinesAfterFirstDispatch = batchExecutor.cachedPipelineCount();
-            int buffersAfterFirstDispatch = batchExecutor.allocatedBufferCount();
-
-            // The second identically sized dispatch must hit both caches. This
-            // validates the allocation strategy before real worldgen is allowed
-            // to depend on it.
-            validateProbeBatch(batchExecutor.executeF32Bits(generatedProbe, COMPILER_PROBE_BATCH_SIZE));
-            if (pipelinesAfterFirstDispatch != 1 || batchExecutor.cachedPipelineCount() != 1) {
-                throw new IllegalStateException("Metal compute pipeline cache did not reuse the generated probe pipeline");
-            }
-            if (buffersAfterFirstDispatch != 1 || batchExecutor.allocatedBufferCount() != 1) {
-                throw new IllegalStateException("Metal shared-buffer pool did not reuse the probe allocation");
-            }
+            validateGeneratedF32Probe();
+            validateExplicitF32Boundary();
 
             state = State.AVAILABLE;
             LOGGER.info(
-                    "Metal backend initialized on '{}' (DFC F32 -> MSL, {}-element batch dispatch, bit-exact readback, pipeline/buffer reuse verified)",
+                    "Metal backend initialized on '{}' (DFC F32 -> MSL, {}-element batches, explicit F64->F32 boundary, bit-exact readback, pipeline/buffer reuse verified)",
                     deviceName,
                     COMPILER_PROBE_BATCH_SIZE
             );
@@ -120,7 +105,71 @@ public final class MetalRuntime {
         return deviceName;
     }
 
-    private static void validateProbeBatch(int[] resultBits) {
+    private static void validateGeneratedF32Probe() {
+        float compilerProbeValue = Float.intBitsToFloat(COMPILER_PROBE_BITS);
+        GeneratedMetalSource generatedProbe = MetalF32Compiler.compile(new ConstantF32Node(compilerProbeValue));
+
+        // First dispatch compiles the pipeline and allocates a shared buffer.
+        validateConstantProbeBatch(batchExecutor.executeF32Bits(generatedProbe, COMPILER_PROBE_BATCH_SIZE));
+        int pipelinesAfterFirstDispatch = batchExecutor.cachedPipelineCount();
+        int buffersAfterFirstDispatch = batchExecutor.allocatedBufferCount();
+
+        // The second identically sized dispatch must hit both caches. This
+        // validates the allocation strategy before real worldgen is allowed
+        // to depend on it.
+        validateConstantProbeBatch(batchExecutor.executeF32Bits(generatedProbe, COMPILER_PROBE_BATCH_SIZE));
+        if (pipelinesAfterFirstDispatch != 1 || batchExecutor.cachedPipelineCount() != 1) {
+            throw new IllegalStateException("Metal compute pipeline cache did not reuse the generated probe pipeline");
+        }
+        if (buffersAfterFirstDispatch != 1 || batchExecutor.allocatedBufferCount() != 1) {
+            throw new IllegalStateException("Metal shared-buffer pool did not reuse the probe allocation");
+        }
+    }
+
+    private static void validateExplicitF32Boundary() {
+        int[] hostRoundedBits = createBoundaryProbeBits();
+        GeneratedMetalSource boundaryProbe = MetalF32BoundaryCompiler.compileIdentity();
+
+        int[] firstResult = batchExecutor.executeF32BoundaryBits(boundaryProbe, hostRoundedBits);
+        validateBoundaryProbe(hostRoundedBits, firstResult);
+        int pipelinesAfterFirstDispatch = batchExecutor.cachedPipelineCount();
+        int buffersAfterFirstDispatch = batchExecutor.allocatedBufferCount();
+
+        int[] secondResult = batchExecutor.executeF32BoundaryBits(boundaryProbe, hostRoundedBits);
+        validateBoundaryProbe(hostRoundedBits, secondResult);
+        if (pipelinesAfterFirstDispatch != 2 || batchExecutor.cachedPipelineCount() != 2) {
+            throw new IllegalStateException("Metal compute pipeline cache did not reuse the F32 boundary pipeline");
+        }
+        // The boundary probe deliberately has the same batch size as the AST
+        // probe, so the same shared-buffer bucket must still need one allocation.
+        if (buffersAfterFirstDispatch != 1 || batchExecutor.allocatedBufferCount() != 1) {
+            throw new IllegalStateException("Metal F32 boundary did not reuse the shared probe allocation");
+        }
+    }
+
+    private static int[] createBoundaryProbeBits() {
+        double[] sourceValues = {
+                -4096.125,
+                -17.00000011920929,
+                -1.0 / 3.0,
+                -0.0,
+                0.0,
+                1.0 / 3.0,
+                0.9999999701976776,
+                Math.PI,
+                4096.125,
+        };
+        int[] bits = new int[COMPILER_PROBE_BATCH_SIZE];
+        for (int i = 0; i < bits.length; i++) {
+            // This cast is the contract: exact/F64 work remains on the host and
+            // only the explicitly rounded F32 value crosses into Metal.
+            float rounded = (float) sourceValues[i % sourceValues.length];
+            bits[i] = Float.floatToRawIntBits(rounded);
+        }
+        return bits;
+    }
+
+    private static void validateConstantProbeBatch(int[] resultBits) {
         if (resultBits.length != COMPILER_PROBE_BATCH_SIZE) {
             throw new IllegalStateException("Metal DFC F32 probe returned an unexpected batch length");
         }
@@ -128,6 +177,19 @@ public final class MetalRuntime {
             if (resultBits[i] != COMPILER_PROBE_BITS) {
                 throw new IllegalStateException("Metal DFC F32 compute probe mismatch at element " + i
                         + ": expected 0x" + Integer.toHexString(COMPILER_PROBE_BITS)
+                        + ", got 0x" + Integer.toHexString(resultBits[i]));
+            }
+        }
+    }
+
+    private static void validateBoundaryProbe(int[] expectedBits, int[] resultBits) {
+        if (resultBits.length != expectedBits.length) {
+            throw new IllegalStateException("Metal F32 boundary probe returned an unexpected batch length");
+        }
+        for (int i = 0; i < resultBits.length; i++) {
+            if (resultBits[i] != expectedBits[i]) {
+                throw new IllegalStateException("Metal F32 boundary changed host-rounded bits at element " + i
+                        + ": expected 0x" + Integer.toHexString(expectedBits[i])
                         + ", got 0x" + Integer.toHexString(resultBits[i]));
             }
         }
