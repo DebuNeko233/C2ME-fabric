@@ -1,8 +1,26 @@
 name: C2ME Test
 
 on:
-  push: {}
-  pull_request: {}
+  # Full Minecraft server tests are expensive. Do not run them for every PR
+  # synchronize event; normal PR pushes are covered by Build/Metal compile CI.
+  # Run the server suite automatically only after changes reach the integration
+  # branch, or explicitly when a full runtime check is needed.
+  workflow_dispatch:
+  push:
+    branches:
+      - dev/26.2.0
+    paths:
+      - 'c2me-*/src/main/**'
+      - 'tests/test-mod/src/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - '.github/workflows/test.yml'
+
+concurrency:
+  group: test-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   packages: read
@@ -10,6 +28,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -41,10 +60,19 @@ jobs:
       with:
         cache-read-only: false
         cache-cleanup: never
-        
+
     - name: Test C2ME
+      shell: bash
       run: |
-        ./gradlew clean ${{ matrix.testTask }}
+        set +e
+        timeout --signal=TERM --kill-after=30s 20m \
+          ./gradlew clean "${{ matrix.testTask }}" --no-daemon --stacktrace
+        status=$?
+        set -e
+        if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+          echo "::error::${{ matrix.testTask }} exceeded the 20-minute process watchdog"
+        fi
+        exit "$status"
       env:
         GPR_MAVEN_USER: ${{ github.actor }}
         GPR_MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}

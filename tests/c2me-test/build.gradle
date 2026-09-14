@@ -28,7 +28,7 @@ loom {
         testC2MEServer {
             server()
             runDir project.getProjectDir().toPath().relativize(project.getBuildDir().toPath()).resolve("testServer").toString()
-            vmArgs runVMArgs
+            vmArgs runVMArgs + ["-Dc2me.metal.testSamplerBinding=true"]
         }
     }
 }

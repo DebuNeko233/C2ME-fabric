@@ -20,6 +20,7 @@ import com.ishland.c2me.base.mixin.access.IThreadedAnvilChunkStorage;
 import com.ishland.c2me.opts.accel.opencl.common.ducks.TACSExtension;
 import com.ishland.c2me.opts.accel.opencl.common.gen.CLServerBatchedBiomeNoiseContext;
 import com.ishland.c2me.opts.accel.opencl.common.gen.CLServerWorldContext;
+import com.ishland.c2me.opts.dfc.common.worldgen.WorldgenRegionGeometry;
 import com.ishland.c2me.rewrites.chunksystem.common.ChunkLoadingContext;
 import com.ishland.c2me.rewrites.chunksystem.common.ChunkState;
 import com.ishland.c2me.rewrites.chunksystem.common.NewChunkStatus;
@@ -74,7 +75,7 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
         ChunkPos pos = context.holder().getKey();
         final Chunk startingChunk = context.holder().getItem().get().chunk();
 
-        if (!CLServerBatchedBiomeNoiseContext.isAligned(pos.x(), pos.z()) || startingChunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
+        if (!WorldgenRegionGeometry.isAligned(pos.x(), pos.z(), CLServerBatchedBiomeNoiseContext.BATCH_SIZE) || startingChunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
             return Completable.complete();
         }
 
@@ -88,24 +89,35 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
             return Completable.complete();
         }
 
+        final var generationShapeConfig = noiseChunkGenerator.getSettings().value().generationShapeConfig();
+        final WorldgenRegionGeometry regionGeometry = new WorldgenRegionGeometry(
+                pos.x(),
+                pos.z(),
+                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
+                generationShapeConfig.minimumY(),
+                generationShapeConfig.height(),
+                generationShapeConfig.horizontalCellBlockCount(),
+                generationShapeConfig.verticalCellBlockCount()
+        );
+
         Long2ReferenceOpenHashMap<ChunkHolder> holderCache = new Long2ReferenceOpenHashMap<>();
         Long2ReferenceFunction<ChunkHolder> getHolder0 = posx -> context.theChunkSystem().getHolder(ChunkPos.fromLong(posx)).getUserData().get();
         Long2ReferenceFunction<ChunkHolder> getHolder = posx -> holderCache.computeIfAbsent(posx, getHolder0);
         BoundedRegionArray.Getter<AbstractChunkHolder> getHolder1 = (x1, z1) -> getHolder.get(ChunkPos.toLong(x1, z1));
 
         BoundedRegionArray<ProtoChunk> boundedRegionArray = new BoundedRegionArray<>(
-                pos.x(),
-                pos.z(),
-                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
-                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
+                regionGeometry.startChunkX(),
+                regionGeometry.startChunkZ(),
+                regionGeometry.chunkCount(),
+                regionGeometry.chunkCount(),
                 (x, z) -> (ProtoChunk) getHolder1.get(x, z).getUncheckedOrNull(ChunkStatus.STRUCTURE_REFERENCES)
         );
 
         BoundedRegionArray<ChunkRegion> chunkRegions = new BoundedRegionArray<>(
-                pos.x(),
-                pos.z(),
-                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
-                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
+                regionGeometry.startChunkX(),
+                regionGeometry.startChunkZ(),
+                regionGeometry.chunkCount(),
+                regionGeometry.chunkCount(),
                 (x, z) -> {
                     ChunkGenerationStep generationStep = ChunkGenerationSteps.GENERATION.get(ChunkStatus.BIOMES);
                     return new ChunkRegion(
@@ -117,9 +129,9 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
                 }
         );
 
-        for (int dx = 0; dx < CLServerBatchedBiomeNoiseContext.BATCH_SIZE; dx++) {
-            for (int dz = 0; dz < CLServerBatchedBiomeNoiseContext.BATCH_SIZE; dz++) {
-                ChunkRegion region = chunkRegions.get(pos.x() + dx, pos.z() + dz);
+        for (int dx = 0; dx < regionGeometry.chunkCount(); dx++) {
+            for (int dz = 0; dz < regionGeometry.chunkCount(); dz++) {
+                ChunkRegion region = chunkRegions.get(regionGeometry.startChunkX() + dx, regionGeometry.startChunkZ() + dz);
                 if (Blender.getBlender(region) != Blender.getNoBlending()) {
                     return Completable.complete();
                 }
@@ -127,17 +139,17 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
         }
 
         BoundedRegionArray<StructureAccessor> structureAccessors = new BoundedRegionArray<>(
-                pos.x(),
-                pos.z(),
-                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
-                CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
+                regionGeometry.startChunkX(),
+                regionGeometry.startChunkZ(),
+                regionGeometry.chunkCount(),
+                regionGeometry.chunkCount(),
                 (x, z) -> chunkGenerationContext.world().getStructureAccessor().forRegion(chunkRegions.get(x, z))
         );
 
         boolean allPostNoise = true;
-        for (int dx = 0; dx < CLServerBatchedBiomeNoiseContext.BATCH_SIZE; dx++) {
-            for (int dz = 0; dz < CLServerBatchedBiomeNoiseContext.BATCH_SIZE; dz++) {
-                ProtoChunk chunk = boundedRegionArray.get(pos.x() + dx, pos.z() + dz);
+        for (int dx = 0; dx < regionGeometry.chunkCount(); dx++) {
+            for (int dz = 0; dz < regionGeometry.chunkCount(); dz++) {
+                ProtoChunk chunk = boundedRegionArray.get(regionGeometry.startChunkX() + dx, regionGeometry.startChunkZ() + dz);
                 if (chunk == null || !chunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
                     allPostNoise = false;
                     break;
@@ -151,13 +163,19 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
 
         return Completable.defer(() -> {
             return Completable.fromCompletionStage(VanillaWorldGenerationDelegate.runTaskWithLockArea(
-                    pos.x(),
-                    pos.z(),
-                    CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
-                    CLServerBatchedBiomeNoiseContext.BATCH_SIZE,
+                    regionGeometry.startChunkX(),
+                    regionGeometry.startChunkZ(),
+                    regionGeometry.chunkCount(),
+                    regionGeometry.chunkCount(),
                     context.schedulingManager(),
                     () -> {
-                        CLServerBatchedBiomeNoiseContext batchedBiomeNoiseContext = new CLServerBatchedBiomeNoiseContext(pos, clContext, noiseChunkGenerator, chunkGenerationContext.world().getChunkManager().getNoiseConfig());
+                        CLServerBatchedBiomeNoiseContext batchedBiomeNoiseContext = new CLServerBatchedBiomeNoiseContext(
+                                pos,
+                                regionGeometry,
+                                clContext,
+                                noiseChunkGenerator,
+                                chunkGenerationContext.world().getChunkManager().getNoiseConfig()
+                        );
                         return batchedBiomeNoiseContext.execute(context, boundedRegionArray, structureAccessors);
                     }
             ));
@@ -184,7 +202,7 @@ public class BatchingBiomeNoiseStatus extends NewChunkStatus {
         ChunkPos pos = holder.getKey();
         final Chunk chunk = holder.getItem().get().chunk();
         // depend on BATCH_SIZExBATCH_SIZE if aligned, nothing otherwise
-        if (CLServerBatchedBiomeNoiseContext.isAligned(pos.x(), pos.z()) && !chunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
+        if (WorldgenRegionGeometry.isAligned(pos.x(), pos.z(), CLServerBatchedBiomeNoiseContext.BATCH_SIZE) && !chunk.getStatus().isAtLeast(ChunkStatus.NOISE)) {
             return getGenDeps(pos);
         } else {
             return EMPTY_DEPENDENCIES;

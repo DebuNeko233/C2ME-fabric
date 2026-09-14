@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "c2me-opts-accel-metal",
+  "version": "${version}",
+  "name": "Concurrent Chunk Management Engine (Optimizations/Acceleration/Metal)",
+  "description": "Experimental Metal acceleration backend for world generation on macOS",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.ishland.c2me.opts.accel.metal.ModuleEntryPoint"
+    ]
+  },
+  "mixins": [
+    "c2me-opts-accel-metal.mixins.json"
+  ],
+  "depends": {
+    "minecraft": "*",
+    "fabricloader": "*",
+    "c2me-base": "*",
+    "c2me-opts-dfc": "=${version}"
+  },
+  "recommends": {
+    "scalablelux": "*"
+  },
+  "authors": [
+    "DebuNeko233",
+    "RelativityMC",
+    "ishland"
+  ],
+  "contact": {
+    "sources": "https://github.com/DebuNeko233/C2ME-fabric",
+    "issues": "https://github.com/DebuNeko233/C2ME-fabric/issues"
+  },
+  "license": "MIT",
+  "custom": {
+    "modmenu": {
+      "parent": "c2me"
+    }
+  }
+}

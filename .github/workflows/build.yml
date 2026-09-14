@@ -1,16 +1,24 @@
 name: C2ME Build Script
 
 on:
-  push: {}
+  # Feature branches are validated by pull_request. Limiting push CI to the
+  # integration branch avoids enqueueing an identical second run for every PR push.
+  push:
+    branches:
+      - dev/26.2.0
   pull_request: {}
+
+concurrency:
+  group: build-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   packages: read
 
 jobs:
   build:
-
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
     - uses: actions/checkout@v5
@@ -61,4 +69,3 @@ jobs:
       with:
         name: c2me-artifact
         path: 'build/libs/*.jar'
-      

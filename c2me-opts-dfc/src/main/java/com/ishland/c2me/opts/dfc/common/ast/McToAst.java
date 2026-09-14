@@ -216,12 +216,16 @@ public class McToAst {
     public static AstNode toAst(Spline<DensityFunctionTypes.Spline.DensityFunctionWrapper> spline) {
         return switch (spline) {
             case Spline.FixedFloatFunction<DensityFunctionTypes.Spline.DensityFunctionWrapper> f -> new ConstantF32Node(f.value());
-            case Spline.Implementation<DensityFunctionTypes.Spline.DensityFunctionWrapper> f -> new SplineNormalNode(
-                    toAst(f.locationFunction().function()),
-                    f.locations().clone(),
-                    f.values().stream().map(McToAst::toAst).toArray(AstNode[]::new),
-                    f.derivatives().clone()
-            );
+            case Spline.Implementation<DensityFunctionTypes.Spline.DensityFunctionWrapper> f -> {
+                DensityFunction referenceLocationFunction = f.locationFunction().function();
+                yield new SplineNormalNode(
+                        toAst(referenceLocationFunction),
+                        referenceLocationFunction,
+                        f.locations().clone(),
+                        f.values().stream().map(McToAst::toAst).toArray(AstNode[]::new),
+                        f.derivatives().clone()
+                );
+            }
         };
     }
 

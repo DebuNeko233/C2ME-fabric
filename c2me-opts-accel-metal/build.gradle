@@ -1,0 +1,15 @@
+moduleDependencies(project, [
+        "c2me-base",
+        "c2me-opts-dfc",
+])
+
+dependencies {
+    include implementation(platform("org.lwjgl:lwjgl-bom:${lwjgl_version}"))
+    include implementation("org.lwjgl:lwjgl")
+
+    // The Java side talks to Metal through LWJGL's Objective-C/JNI helpers.
+    // Keep both macOS native variants in the standalone module so the same jar
+    // can be used on Intel and Apple Silicon Macs.
+    include runtimeOnly("org.lwjgl:lwjgl::natives-macos")
+    include runtimeOnly("org.lwjgl:lwjgl::natives-macos-arm64")
+}

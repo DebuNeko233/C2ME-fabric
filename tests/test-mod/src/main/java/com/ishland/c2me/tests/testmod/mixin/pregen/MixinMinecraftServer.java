@@ -41,6 +41,7 @@ import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -49,6 +50,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import javax.management.NotificationEmitter;
 import javax.management.openmbean.CompositeData;
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,7 +106,11 @@ public abstract class MixinMinecraftServer extends ReentrantThreadExecutor<Serve
             while (!future.isDone() && isRunning()) {
                 if (!c2metest$runAsyncTask()) LockSupport.parkNanos("waiting for tasks", 100000L);
             }
-            if (!isRunning()) LOGGER.error("Exiting due to server stopping");
+            if (!isRunning()) {
+                LOGGER.error("Exiting due to server stopping");
+            } else {
+                future.join();
+            }
             for (ServerWorld world : this.worlds.values()) {
                 world.getChunkManager().tick(() -> true, false);
             }
@@ -112,8 +118,31 @@ public abstract class MixinMinecraftServer extends ReentrantThreadExecutor<Serve
             final String message = String.format("PreGen completed after %.1fs", duration / 1_000_000_000.0);
             LOGGER.info(message);
             System.err.print(message + "\n");
+            c2metest$verifyMetalSamplerDifferential();
         } else {
             this.running = false;
+        }
+    }
+
+    @Unique
+    private static void c2metest$verifyMetalSamplerDifferential() {
+        if (!Boolean.getBoolean("c2me.metal.testSamplerBinding")) {
+            return;
+        }
+        try {
+            Class<?> probeClass = Class.forName("com.ishland.c2me.opts.accel.metal.common.MetalSamplerBindingIntegrationProbe");
+            probeClass.getMethod("assertDifferentialObserved").invoke(null);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException("Metal sampler differential completion gate failed", cause);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Unable to invoke Metal sampler differential completion gate", e);
         }
     }
 
