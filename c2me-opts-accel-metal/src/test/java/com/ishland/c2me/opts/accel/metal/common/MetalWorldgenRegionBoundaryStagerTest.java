@@ -135,7 +135,7 @@ class MetalWorldgenRegionBoundaryStagerTest {
     }
 
     @Test
-    void failedCoordinateValidationDoesNotConsumeCell() {
+    void failedCoordinatePreflightDoesNotRunExactEvaluationOrConsumeCell() {
         MetalWorldgenRegionDomain domain = createDomain();
         MetalWorldgenRegionBoundaryStager stager = new MetalWorldgenRegionBoundaryStager(domain, SLOT_COUNT);
         AtomicInteger evaluations = new AtomicInteger();
@@ -148,13 +148,11 @@ class MetalWorldgenRegionBoundaryStagerTest {
                 firstCell.x(), firstCell.y(), firstCell.z(),
                 invalid.x(), invalid.y(), invalid.z(),
                 SLOT_COUNT,
-                (x, y, z, type, cache, output) -> {
-                    evaluations.incrementAndGet();
-                    Arrays.fill(output, 0.0f);
-                },
+                (x, y, z, type, cache, output) -> evaluations.incrementAndGet(),
                 EvalType.INTERPOLATION,
                 DfcObjectCache.Noop.INSTANCE
         ));
+        assertEquals(0, evaluations.get());
 
         MetalWorldgenRegionBoundaryStager.ExactBoundaryEvaluator evaluator =
                 valueEvaluator(domain, evaluations);
@@ -171,7 +169,7 @@ class MetalWorldgenRegionBoundaryStagerTest {
         }
 
         assertArrayEquals(expectedRegionValues(domain), stager.finish());
-        assertEquals(cells.size() + 1, evaluations.get());
+        assertEquals(cells.size(), evaluations.get());
     }
 
     @Test

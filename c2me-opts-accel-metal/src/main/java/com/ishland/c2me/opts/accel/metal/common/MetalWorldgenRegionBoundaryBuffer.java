@@ -39,6 +39,11 @@ import java.util.Objects;
  * proven final-noise order: X fastest, then Z, then Y. The output layout is
  * {@code slot * regionSampleCount + spatialIndex}.</p>
  *
+ * <p>A cell can be preflighted before exact evaluation. Preflight validates the
+ * complete cell identity and coordinates without mutating this buffer; only the
+ * returned prepared submission can commit F32 values. This lets sampler-bound
+ * exact DFC work run only after all cheap structural checks have passed.</p>
+ *
  * <p>This is a staging/validation container only. It does not dispatch Metal
  * work, alter the worldgen read/write ABI, touch aquifers or event dependencies,
  * or write results back to chunks.</p>
@@ -85,18 +90,28 @@ final class MetalWorldgenRegionBoundaryBuffer {
             int sourceSlotCount,
             float[] slotMajorValues
     ) {
+        this.prepareCell(cellX, cellY, cellZ, x, y, z, sourceSlotCount).commit(slotMajorValues);
+    }
+
+    PreparedCell prepareCell(
+            int cellX,
+            int cellY,
+            int cellZ,
+            int[] x,
+            int[] y,
+            int[] z,
+            int sourceSlotCount
+    ) {
         this.requireMutable();
         Objects.requireNonNull(x, "x");
         Objects.requireNonNull(y, "y");
         Objects.requireNonNull(z, "z");
-        Objects.requireNonNull(slotMajorValues, "slotMajorValues");
 
         int cellIndex = this.cellIndex(cellX, cellY, cellZ);
         if (this.submittedCells.get(cellIndex)) {
             throw new IllegalStateException("Duplicate Metal worldgen boundary cell submission: ("
                     + cellX + "," + cellY + "," + cellZ + ")");
         }
-
         if (y.length != x.length || z.length != x.length) {
             throw new IllegalArgumentException("Metal worldgen boundary coordinate arrays must have equal lengths");
         }
@@ -106,13 +121,6 @@ final class MetalWorldgenRegionBoundaryBuffer {
         }
 
         int sourceSampleCount = x.length;
-        int expectedValueCount = Math.multiplyExact(sourceSlotCount, sourceSampleCount);
-        if (slotMajorValues.length != expectedValueCount) {
-            throw new IllegalArgumentException("Metal worldgen boundary sample/value count mismatch: expected "
-                    + expectedValueCount + " slot-major value(s) for " + sourceSampleCount
-                    + " sample(s), got " + slotMajorValues.length);
-        }
-
         int[] spatialIndices = new int[sourceSampleCount];
         BitSet batchCoordinates = new BitSet(this.regionSampleCount);
         for (int sample = 0; sample < sourceSampleCount; sample++) {
@@ -126,15 +134,15 @@ final class MetalWorldgenRegionBoundaryBuffer {
             spatialIndices[sample] = spatialIndex;
         }
 
-        for (int slot = 0; slot < this.slotCount; slot++) {
-            int sourceBase = Math.multiplyExact(slot, sourceSampleCount);
-            int targetBase = Math.multiplyExact(slot, this.regionSampleCount);
-            for (int sample = 0; sample < sourceSampleCount; sample++) {
-                this.values[targetBase + spatialIndices[sample]] = slotMajorValues[sourceBase + sample];
-            }
-        }
-        this.writtenCoordinates.or(batchCoordinates);
-        this.submittedCells.set(cellIndex);
+        return new PreparedCell(
+                cellX,
+                cellY,
+                cellZ,
+                cellIndex,
+                sourceSampleCount,
+                spatialIndices,
+                batchCoordinates
+        );
     }
 
     float[] finish() {
@@ -241,5 +249,72 @@ final class MetalWorldgenRegionBoundaryBuffer {
         return "(" + Math.addExact(geometry.startCellX(), relX)
                 + "," + Math.addExact(geometry.startCellY(), relY)
                 + "," + Math.addExact(geometry.startCellZ(), relZ) + ")";
+    }
+
+    final class PreparedCell {
+
+        private final int cellX;
+        private final int cellY;
+        private final int cellZ;
+        private final int cellIndex;
+        private final int sourceSampleCount;
+        private final int[] spatialIndices;
+        private final BitSet batchCoordinates;
+        private boolean committed;
+
+        private PreparedCell(
+                int cellX,
+                int cellY,
+                int cellZ,
+                int cellIndex,
+                int sourceSampleCount,
+                int[] spatialIndices,
+                BitSet batchCoordinates
+        ) {
+            this.cellX = cellX;
+            this.cellY = cellY;
+            this.cellZ = cellZ;
+            this.cellIndex = cellIndex;
+            this.sourceSampleCount = sourceSampleCount;
+            this.spatialIndices = spatialIndices;
+            this.batchCoordinates = batchCoordinates;
+        }
+
+        void commit(float[] slotMajorValues) {
+            MetalWorldgenRegionBoundaryBuffer.this.requireMutable();
+            if (this.committed) {
+                throw new IllegalStateException("Metal worldgen boundary prepared cell is already committed: ("
+                        + this.cellX + "," + this.cellY + "," + this.cellZ + ")");
+            }
+            Objects.requireNonNull(slotMajorValues, "slotMajorValues");
+            int expectedValueCount = Math.multiplyExact(
+                    MetalWorldgenRegionBoundaryBuffer.this.slotCount,
+                    this.sourceSampleCount
+            );
+            if (slotMajorValues.length != expectedValueCount) {
+                throw new IllegalArgumentException("Metal worldgen boundary sample/value count mismatch: expected "
+                        + expectedValueCount + " slot-major value(s) for " + this.sourceSampleCount
+                        + " sample(s), got " + slotMajorValues.length);
+            }
+            if (MetalWorldgenRegionBoundaryBuffer.this.submittedCells.get(this.cellIndex)) {
+                throw new IllegalStateException("Duplicate Metal worldgen boundary cell submission: ("
+                        + this.cellX + "," + this.cellY + "," + this.cellZ + ")");
+            }
+            if (this.batchCoordinates.intersects(MetalWorldgenRegionBoundaryBuffer.this.writtenCoordinates)) {
+                throw new IllegalStateException("Metal worldgen boundary prepared coordinates overlap an already submitted cell");
+            }
+
+            for (int slot = 0; slot < MetalWorldgenRegionBoundaryBuffer.this.slotCount; slot++) {
+                int sourceBase = Math.multiplyExact(slot, this.sourceSampleCount);
+                int targetBase = Math.multiplyExact(slot, MetalWorldgenRegionBoundaryBuffer.this.regionSampleCount);
+                for (int sample = 0; sample < this.sourceSampleCount; sample++) {
+                    MetalWorldgenRegionBoundaryBuffer.this.values[targetBase + this.spatialIndices[sample]] =
+                            slotMajorValues[sourceBase + sample];
+                }
+            }
+            MetalWorldgenRegionBoundaryBuffer.this.writtenCoordinates.or(this.batchCoordinates);
+            MetalWorldgenRegionBoundaryBuffer.this.submittedCells.set(this.cellIndex);
+            this.committed = true;
+        }
     }
 }

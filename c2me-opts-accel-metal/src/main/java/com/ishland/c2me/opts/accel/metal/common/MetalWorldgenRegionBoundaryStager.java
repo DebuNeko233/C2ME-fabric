@@ -36,10 +36,11 @@ import java.util.Objects;
  *
  * <p>The stager deliberately does not retain a {@link MetalExactBoundaryBatch}.
  * A caller supplies the batch that is valid for the current real interpolation
- * cell, it is evaluated immediately into one reusable cell-local F32 scratch
- * buffer, and the values are then scattered by absolute block coordinate into
- * the region buffer. This keeps sampler-bound exact DFC lifetime at the real
- * interpolation-cell boundary while still building one region-wide handoff.</p>
+ * cell. The cell is structurally preflighted first, then exact values are
+ * evaluated immediately into one reusable cell-local F32 scratch buffer and
+ * committed into the region buffer. This keeps invalid coordinates from
+ * reaching sampler-bound exact DFC work and keeps exact evaluation at the real
+ * interpolation-cell boundary.</p>
  *
  * <p>This remains a preparation layer only. It does not dispatch Metal work,
  * alter the worldgen read/write ABI, touch aquifers or event dependencies, or
@@ -129,17 +130,17 @@ final class MetalWorldgenRegionBoundaryStager {
                     + this.expectedCellSampleCount + " sample(s), got " + x.length);
         }
 
-        evaluator.fill(x, y, z, type, cache, this.cellValues);
-        this.buffer.submitCell(
+        MetalWorldgenRegionBoundaryBuffer.PreparedCell prepared = this.buffer.prepareCell(
                 cellX,
                 cellY,
                 cellZ,
                 x,
                 y,
                 z,
-                this.slotCount,
-                this.cellValues
+                sourceSlotCount
         );
+        evaluator.fill(x, y, z, type, cache, this.cellValues);
+        prepared.commit(this.cellValues);
     }
 
     float[] finish() {
