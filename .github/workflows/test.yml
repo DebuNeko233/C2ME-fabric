@@ -1,11 +1,22 @@
 name: C2ME Test
 
 on:
-  # PRs already validate feature branches; avoid duplicating the same matrix on push.
+  # Full Minecraft server tests are expensive. Do not run them for every PR
+  # synchronize event; normal PR pushes are covered by Build/Metal compile CI.
+  # Run the server suite automatically only after changes reach the integration
+  # branch, or explicitly when a full runtime check is needed.
+  workflow_dispatch:
   push:
     branches:
       - dev/26.2.0
-  pull_request: {}
+    paths:
+      - 'c2me-*/src/main/**'
+      - 'tests/test-mod/src/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - '.github/workflows/test.yml'
 
 concurrency:
   group: test-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
